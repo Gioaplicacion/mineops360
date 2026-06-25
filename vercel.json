@@ -1,5 +1,6 @@
 {
+  "outputDirectory": "motor",
   "rewrites": [
-    { "source": "/(.*)", "destination": "/motor/GlobalMinePlanner_v18.html" }
+    { "source": "/(.*)", "destination": "/GlobalMinePlanner_v18.html" }
   ]
 }
