@@ -1,6 +1,5 @@
 {
-  "outputDirectory": "motor",
-  "rewrites": [
-    { "source": "/(.*)", "destination": "/GlobalMinePlanner_v18.html" }
-  ]
+  "buildCommand": null,
+  "outputDirectory": ".",
+  "framework": null
 }
