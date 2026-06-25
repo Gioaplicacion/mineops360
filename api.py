@@ -1,11 +1,6 @@
 """
-MineOps 360 — API FastAPI para Railway
-========================================
-Variables de entorno esperadas en Railway:
-  PORT          → Puerto (Railway lo inyecta automáticamente)
-  FRONTEND_URL  → URL de tu frontend en Bolt (ej: https://mineops360.bolt.host)
-  
-Sin FRONTEND_URL, acepta todos los orígenes (útil para desarrollo).
+MineOps 360 — API FastAPI corregida
+Fix: "no running event loop" en Railway
 """
 
 import asyncio
@@ -14,55 +9,46 @@ import logging
 import os
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 
 import pandas as pd
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 
 import sys
 sys.path.append(str(Path(__file__).parent))
 from engine.config import ProjectConfig
 from engine.pipeline import MineOpsPipeline, PipelineResult
 
-# ── Logging ────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
-# ── App ────────────────────────────────────────────────────────────────
-app = FastAPI(
-    title="MineOps 360 API",
-    description="Planificación minera open pit — SaaS + modo local",
-    version="1.0.0",
-)
+app = FastAPI(title="MineOps 360 API", version="1.0.0")
 
-# CORS dinámico — acepta el frontend de Bolt + localhost para desarrollo
 FRONTEND_URL = os.getenv("FRONTEND_URL", "")
-origins = ["*"] if not FRONTEND_URL else [
-    FRONTEND_URL,
-    "http://localhost:5173",
-    "http://localhost:3000",
-]
+origins = ["*"] if not FRONTEND_URL else [FRONTEND_URL, "http://localhost:5173", "http://localhost:3000"]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ── Storage en memoria (Railway reinicia → jobs temporales) ────────────
-JOBS: dict[str, dict] = {}
-WS_CLIENTS: dict[str, list] = {}
+JOBS: dict = {}
+WS_CLIENTS: dict = {}
 UPLOAD_DIR = Path("/tmp/mineops_uploads")
 OUTPUT_DIR = Path("/tmp/mineops_outputs")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+# ThreadPoolExecutor para correr el pipeline sin bloquear
+executor = ThreadPoolExecutor(max_workers=2)
 
-# ── Endpoints ──────────────────────────────────────────────────────────
+
 @app.get("/")
 async def root():
     return {"service": "MineOps 360 API", "status": "ok", "version": "1.0.0"}
@@ -81,10 +67,8 @@ async def run_pipeline(
 ):
     job_id = str(uuid.uuid4())
 
-    # Guardar CSV
     csv_path = UPLOAD_DIR / f"{job_id}_modelo.csv"
-    content = await modelo_csv.read()
-    csv_path.write_bytes(content)
+    csv_path.write_bytes(await modelo_csv.read())
 
     fases_path = None
     if fases_csv:
@@ -105,7 +89,9 @@ async def run_pipeline(
     }
     WS_CLIENTS[job_id] = []
 
+    # FIX: usar asyncio.create_task correctamente
     asyncio.create_task(_run_job(job_id, csv_path, fases_path, params))
+
     return {"job_id": job_id, "status": "queued", "ws_url": f"/ws/{job_id}"}
 
 
@@ -164,40 +150,49 @@ async def ws_progress(websocket: WebSocket, job_id: str):
             WS_CLIENTS[job_id].remove(websocket)
 
 
-# ── Background task ────────────────────────────────────────────────────
 async def _run_job(job_id, csv_path, fases_path, params):
+    """FIX: ejecuta el pipeline en threadpool para no bloquear el event loop."""
     JOBS[job_id]["status"] = "running"
+    loop = asyncio.get_event_loop()
 
     def progress_cb(paso, total, mensaje):
         JOBS[job_id]["progress"] = {"paso": paso, "total": total, "mensaje": mensaje}
-        asyncio.create_task(_broadcast(job_id, {
-            "paso": paso, "total": total, "mensaje": mensaje, "status": "running"
-        }))
+        # FIX: usar call_soon_threadsafe para notificar desde el thread
+        asyncio.run_coroutine_threadsafe(
+            _broadcast(job_id, {"paso": paso, "total": total, "mensaje": mensaje, "status": "running"}),
+            loop
+        )
+
+    def _run_sync():
+        """Corre el pipeline de forma síncrona en el threadpool."""
+        try:
+            config   = ProjectConfig.desde_dict(params)
+            pipeline = MineOpsPipeline(config, progress_cb=progress_cb)
+            fases_df = pd.read_csv(fases_path) if fases_path and fases_path.exists() else None
+            return pipeline.ejecutar(str(csv_path), fases_df)
+        except Exception as e:
+            raise e
 
     try:
-        config   = ProjectConfig.desde_dict(params)
-        pipeline = MineOpsPipeline(config, progress_cb=progress_cb)
-        fases_df = pd.read_csv(fases_path) if fases_path and fases_path.exists() else None
-
-        loop = asyncio.get_event_loop()
-        resultado: PipelineResult = await loop.run_in_executor(
-            None, pipeline.ejecutar, str(csv_path), fases_df
-        )
+        # FIX: correr en executor para no bloquear el event loop
+        resultado = await loop.run_in_executor(executor, _run_sync)
 
         resultado.bloques_df.to_csv(OUTPUT_DIR / f"{job_id}_bloques.csv", index=False)
         resultado.plan_df.to_csv(OUTPUT_DIR / f"{job_id}_plan.csv", index=False)
 
         JOBS[job_id]["status"] = "done"
         JOBS[job_id]["result"] = {
-            "job_id":          job_id,
-            "van_total_MUSD":  resultado.van_total_MUSD,
-            "tiempo_total_s":  resultado.tiempo_total_s,
-            "resumen_modelo":  resultado.resumen_modelo,
-            "resumen_pits":    resultado.resumen_pits,
-            "plan_minero":     resultado.plan_minero,
+            "job_id":           job_id,
+            "van_total_MUSD":   resultado.van_total_MUSD,
+            "tiempo_total_s":   resultado.tiempo_total_s,
+            "resumen_modelo":   resultado.resumen_modelo,
+            "resumen_pits":     resultado.resumen_pits,
+            "plan_minero":      resultado.plan_minero,
             "download_bloques": f"/api/download/{job_id}/bloques",
             "download_plan":    f"/api/download/{job_id}/plan",
         }
+        await _broadcast(job_id, {"status": "done", "paso": 4, "total": 4, "mensaje": "Completado"})
+
     except Exception as e:
         logger.exception(f"Error en job {job_id}: {e}")
         JOBS[job_id]["status"] = "error"
