@@ -21,6 +21,7 @@ import pandas as pd
 from .config import ProjectConfig
 from .loader import cargar_modelo, ModeloBloques
 from .optimizer import optimizar_pits, ResultadoPitOptimizer
+from .faseamiento import FaseamientoSimAnnealing, SimAnnealConfig, ResultadoFaseamiento
 from .scheduler import HeuristicaFaseBanco, ResultadoScheduler
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,7 @@ class PipelineResult:
     config:          ProjectConfig
     resumen_modelo:  dict = field(default_factory=dict)
     resumen_pits:    dict = field(default_factory=dict)
+    resumen_fases:   dict = field(default_factory=dict)
     plan_minero:     dict = field(default_factory=dict)
     van_total_MUSD:  float = 0.0
     tiempo_total_s:  float = 0.0
@@ -89,11 +91,28 @@ class MineOpsPipeline:
         opt_result = optimizar_pits(modelo, progress_cb=self.progress_cb)
         result.resumen_pits = opt_result.to_dict()
 
-        # ── PASO 3: Preparar fases ─────────────────────────────────────
-        self._emit(3, "Preparando faseamiento...")
+        # ── PASO 3: Faseamiento con Recocido Simulado ──────────────────
+        self._emit(3, "Faseamiento con Recocido Simulado (¿Cómo?)...")
         if fases_df is None:
-            # Sin faseamiento externo: pit = fase (modo simplificado)
-            fases_df = self._pits_como_fases(opt_result)
+            # Nuevo módulo: Recocido Simulado para pushbacks no concéntricos
+            sa_config = SimAnnealConfig(
+                num_fases         = self.config.scheduler.num_fases if hasattr(self.config.scheduler, 'num_fases') else 4,
+                iteraciones       = 30,   # reducido para Railway
+                temperatura_ini   = 1000.0,
+                tasa_enfriamiento = 0.90,
+            )
+            faseador = FaseamientoSimAnnealing(
+                config      = self.config,
+                sa_config   = sa_config,
+                progress_cb = self.progress_cb,
+            )
+            res_fases = faseador.ejecutar(opt_result.df)
+            fases_df  = res_fases.df.rename(columns={'x':'X','y':'Y','z':'Z','ley':'Ley'})
+            if 'Ley' not in fases_df.columns and 'cu' in fases_df.columns:
+                fases_df = fases_df.rename(columns={'cu':'Ley'})
+            fases_df['tonelaje'] = fases_df.get('ton', opt_result.df.get('ton', 15000))
+        else:
+            res_fases = None
 
         # ── PASO 4: Scheduling ─────────────────────────────────────────
         self._emit(4, "Ejecutando scheduler heurístico...")
@@ -103,6 +122,7 @@ class MineOpsPipeline:
         # ── Ensamblar resultado ────────────────────────────────────────
         result.plan_minero    = sch_result.to_dict()
         result.van_total_MUSD = round(sch_result.van_total / 1e6, 4)
+        result.resumen_fases  = res_fases.resumen if res_fases else {}
         result.bloques_df     = sch_result.bloques
         result.plan_df        = sch_result.plan
         result.tiempo_total_s = round(time.time() - t0, 2)
