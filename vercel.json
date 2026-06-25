@@ -1,1 +1,5 @@
-
+{
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/motor/GlobalMinePlanner_v18.html" }
+  ]
+}
