@@ -75,30 +75,47 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,loadingBlocks}){
   const rebuild=useCallback(()=>{
     const{pivot}=threeRef.current;if(!pivot)return;
     while(pivot.children.length)pivot.remove(pivot.children[0]);
-    const geo=new THREE.BoxGeometry(BS*.86,BZ*.83,BS*.86);
-    const ox=(NX-1)*BS/2,oy=(NY-1)*BS/2,oz=(NZ-1)*BZ/2;
     const meshes=[],cfg=cfgRef.current;
     const rangos=cfg?.rangos||[],oor=cfg?.oorColor||"#b8c2d4";
-    const mx=((cfg?.metal?.presets||[.8])[((cfg?.metal?.presets||[.8]).length-1)]||.8)*1.5;
-    DEMO.forEach(b=>{
-      const _izPct=(b.iz/(NZ-1))*100; if(_izPct<zSliceRef.current||_izPct>zMaxRef.current)return;
-      // Filtro por pit selecto: pit más pequeño = cono más chico
-      const _ps=pitSelectoRef.current;
-      if(_ps){
-        const _nPits=totalPitsRef.current||20;
-        const _rf=_ps/_nPits; // Revenue Factor del pit selecto
-        const _cx=NX/2,_cy=NY/2;
-        const _pr=1-(b.iz/NZ);
-        const _radio=(_rf*(NX/2))*(1-_pr*0.65);
-        if(Math.hypot(b.ix-_cx,b.iy-_cy)>_radio)return;
-      }
-      if(!STAGES[stage].f(b))return;
-      const ley=(b.rawLey/.8)*mx;
-      const[r,g,bv]=colorForLey(ley,rangos,oor);
-      const m=new THREE.Mesh(geo,new THREE.MeshLambertMaterial({color:new THREE.Color(r,g,bv)}));
-      m.position.set(b.ix*BS-ox,b.iz*BZ-oz,b.iy*BS-oy);
-      m.userData={...b,ley};pivot.add(m);meshes.push(m);
-    });
+    const real=realBlocksRef.current;
+
+    if(real&&real.length>0){
+      // ── BLOQUES REALES ──────────────────────────────────────
+      const xs=real.map(b=>b.X),ys=real.map(b=>b.Y),zs=real.map(b=>b.Z);
+      const minX=Math.min(...xs),maxX=Math.max(...xs);
+      const minY=Math.min(...ys),maxY=Math.max(...ys);
+      const minZ=Math.min(...zs),maxZ=Math.max(...zs);
+      const rangeX=maxX-minX||1,rangeY=maxY-minY||1,rangeZ=maxZ-minZ||1;
+      const scale=400/Math.max(rangeX,rangeY,rangeZ);
+      const bsz=Math.max(4,scale*Math.min(rangeX,rangeY,rangeZ)/Math.cbrt(real.length)*0.9);
+      const bGeo=new THREE.BoxGeometry(bsz,bsz*0.8,bsz);
+      real.forEach(b=>{
+        const zp=((b.Z-minZ)/rangeZ)*100;
+        if(zp<zSliceRef.current||zp>zMaxRef.current)return;
+        const ley=b.Cu||b.cu||b.ley||0;
+        const[r,g,bv]=colorForLey(ley,rangos,oor);
+        const m=new THREE.Mesh(bGeo,new THREE.MeshLambertMaterial({color:new THREE.Color(r,g,bv)}));
+        m.position.set((b.X-minX-(rangeX/2))*scale,(b.Z-minZ-(rangeZ/2))*scale,(b.Y-minY-(rangeY/2))*scale);
+        m.userData={...b,ley,ix:Math.round((b.X-minX)/rangeX*NX),iy:Math.round((b.Y-minY)/rangeY*NY),iz:Math.round((b.Z-minZ)/rangeZ*NZ),fase:b.fase||1,per:b.per||1};
+        pivot.add(m);meshes.push(m);
+      });
+    } else {
+      // ── BLOQUES DEMO ────────────────────────────────────────
+      const ox=(NX-1)*BS/2,oy=(NY-1)*BS/2,oz=(NZ-1)*BZ/2;
+      const dGeo=new THREE.BoxGeometry(BS*.86,BZ*.83,BS*.86);
+      const mx=((cfg?.metal?.presets||[.8])[((cfg?.metal?.presets||[.8]).length-1)]||.8)*1.5;
+      DEMO.forEach(b=>{
+        const _izPct=(b.iz/(NZ-1))*100;if(_izPct<zSliceRef.current||_izPct>zMaxRef.current)return;
+        const _ps=pitSelectoRef.current;
+        if(_ps){const _nPits=totalPitsRef.current||20;const _rf=_ps/_nPits;const _cx=NX/2,_cy=NY/2;const _pr=1-(b.iz/NZ);const _radio=(_rf*(NX/2))*(1-_pr*0.65);if(Math.hypot(b.ix-_cx,b.iy-_cy)>_radio)return;}
+        if(!STAGES[stage].f(b))return;
+        const ley=(b.rawLey/.8)*mx;
+        const[r,g,bv]=colorForLey(ley,rangos,oor);
+        const m=new THREE.Mesh(dGeo,new THREE.MeshLambertMaterial({color:new THREE.Color(r,g,bv)}));
+        m.position.set(b.ix*BS-ox,b.iz*BZ-oz,b.iy*BS-oy);
+        m.userData={...b,ley};pivot.add(m);meshes.push(m);
+      });
+    }
     threeRef.current.meshes=meshes;
   },[stage,zSlice,zMax]);
 
@@ -342,10 +359,8 @@ function ResultsDashboard({result,jobId}){
   const res=result.resumen_modelo||{};
   const plan=(result.plan_minero?.plan||[]).filter(p=>p&&typeof p.periodo!=="undefined");
   const van=result.van_total_MUSD||0;
-
   return(
     <div style={{display:"flex",flexDirection:"column",gap:12}}>
-      {/* KPIs */}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
         {[["VAN Total","$"+van.toFixed(2)+" M","var(--ore)"],["Períodos",(result.plan_minero?.periodos||0)+" años","var(--acc)"],["Mineral",(res.tonelaje_mineral_Mt||0)+" Mt","var(--txt)"],["Ley media",((res.ley_promedio_pct||0)>10?((res.ley_promedio_pct||0)/100).toFixed(4):(res.ley_promedio_pct||0).toFixed(4))+"% Cu","var(--gold)"]].map(([l,v,c])=>(
           <div key={l} style={{background:"var(--card)",borderRadius:8,border:"1px solid var(--brd)",padding:"10px 12px"}}>
@@ -354,14 +369,11 @@ function ResultsDashboard({result,jobId}){
           </div>
         ))}
       </div>
-
-      {/* Tabs */}
       <div style={{display:"flex",borderBottom:"1px solid var(--brd)"}}>
         {[["resumen","Resumen"],["plan","Plan"],["descargas","Descargas"]].map(([id,lbl])=>(
           <button key={id} onClick={()=>setTab(id)} style={{flex:1,padding:10,fontSize:11,fontWeight:600,border:"none",background:"none",color:tab===id?"var(--acc)":"var(--txt2)",cursor:"pointer",borderBottom:`2px solid ${tab===id?"var(--acc)":"transparent"}`}}>{lbl}</button>
         ))}
       </div>
-
       {tab==="resumen"&&(
         <div style={{display:"flex",flexDirection:"column",gap:8}}>
           {[["Total bloques",(res.total_bloques||0).toLocaleString()],["Bloques mineral",(res.bloques_mineral||0).toLocaleString()],["Bloques estéril",(res.bloques_esteril||0).toLocaleString()],["Tonelaje total",(res.tonelaje_total_Mt||0)+" Mt"],["Ley de corte",(res.ley_corte_calculada_pct||0)+"% Cu"],["Pits generados",(result.resumen_pits?.num_pits||0)]].map(([k,v])=>(
@@ -372,7 +384,6 @@ function ResultsDashboard({result,jobId}){
           ))}
         </div>
       )}
-
       {tab==="plan"&&(
         <div style={{display:"flex",flexDirection:"column",gap:8}}>
           {plan.length===0?<div style={{fontSize:12,color:"var(--txt2)",textAlign:"center",padding:20}}>Sin datos de plan</div>:
@@ -386,7 +397,6 @@ function ResultsDashboard({result,jobId}){
           {plan.length>10&&<div style={{fontSize:11,color:"var(--txt2)",textAlign:"center"}}>+{plan.length-10} períodos más en el CSV</div>}
         </div>
       )}
-
       {tab==="descargas"&&(
         <div style={{display:"flex",flexDirection:"column",gap:8}}>
           <a href={`${API}/api/download/${jobId}/plan`} style={{display:"block",background:"none",border:"1px solid var(--brd)",borderRadius:8,padding:"10px 14px",fontSize:12,color:"var(--txt)",textDecoration:"none",textAlign:"center"}}>↓ Descargar Plan Minero (CSV)</a>
@@ -397,7 +407,7 @@ function ResultsDashboard({result,jobId}){
   );
 }
 
-// ── App principal ───────────────────────────────────────────────
+// ── PitByPitChart ───────────────────────────────────────────────
 function PitByPitChart({pits,onSelect,selecto}){
   if(!pits||!pits.length) return null;
   const maxTon=Math.max(...pits.map(p=>p.tonMin+p.tonEst),1);
@@ -458,7 +468,7 @@ function PitByPitChart({pits,onSelect,selecto}){
   );
 }
 
-
+// ── App principal ───────────────────────────────────────────────
 function App(){
   const [tab,setTab]=useState("proyecto");
   const [pitData,setPitData]=useState(null);
@@ -481,7 +491,6 @@ function App(){
           const data=await r.json();
           if(data&&data.van_total_MUSD!==undefined){
             setResult(data);setStatus("done");setTab("resultados");loadRealBlocks(jid);
-            // Generar datos Pit-by-Pit
             const van=data.van_total_MUSD||30;
             const n=20;
             const pd=Array.from({length:n},(_,i)=>{
@@ -515,7 +524,6 @@ function App(){
         headers.forEach((h,i)=>{obj[h]=isNaN(vals[i])?vals[i]:parseFloat(vals[i]);});
         return obj;
       }).filter(b=>!isNaN(b.x)&&!isNaN(b.y)&&!isNaN(b.z));
-      // Normalizar columna de ley
       blocks.forEach(b=>{
         b.Cu=b.cu??b.ley??b.Cu??b.grade??0;
         b.X=b.x??b.X??0;
@@ -524,7 +532,6 @@ function App(){
         b.fase=b.fase??b.phase??1;
         b.per=b.periodo??b.period??b.per??1;
       });
-      // Subsamplear a 5000 bloques para performance
       const sample=blocks.length>5000
         ?blocks.filter((_,i)=>i%Math.ceil(blocks.length/5000)===0).slice(0,5000)
         :blocks;
@@ -563,7 +570,6 @@ function App(){
 
   return(
     <div style={{display:"flex",flexDirection:"column",height:"100vh"}}>
-      {/* Header */}
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"9px 14px",background:"var(--card)",borderBottom:"1px solid var(--brd)",flexShrink:0}}>
         <div style={{display:"flex",alignItems:"center",gap:10}}>
           <div style={{width:28,height:28,borderRadius:7,background:"var(--acc)",display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontWeight:700,fontSize:14}}>G</div>
@@ -585,9 +591,7 @@ function App(){
           </div>
         ))}
       </div>
-
       <div style={{display:"flex",flex:1,overflow:"hidden"}}>
-        {/* Sidebar */}
         <div style={{width:280,flexShrink:0,borderRight:"1px solid var(--brd)",display:"flex",flexDirection:"column",background:"var(--sur)"}}>
           <div style={{display:"flex",borderBottom:"1px solid var(--brd)",background:"var(--card)"}}>
             {[["proyecto","Proyecto"],["metal","Metal & Rangos"],["resultados","Resultados"]].map(([id,lbl])=>(
@@ -607,8 +611,6 @@ function App(){
             )}
           </div>
         </div>
-
-        {/* Visor 3D */}
         <div style={{flex:1,overflowY:"auto",padding:16,display:"flex",flexDirection:"column",gap:12}}>
           <div style={{background:"var(--card)",borderRadius:12,border:"1px solid var(--brd)",padding:16,flex:1}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
@@ -618,8 +620,8 @@ function App(){
               </div>
               <div style={{display:"flex",gap:8,alignItems:"center"}}>
                 {loadingBlocks&&<span style={{fontSize:9,color:"var(--acc)"}}>⟳ Cargando datos reales...</span>}
-              {realBlocks&&realBlocks.length>0&&<span style={{fontSize:9,padding:"2px 7px",borderRadius:8,background:"rgba(0,212,255,.12)",color:"var(--acc)",fontWeight:600}}>● DATOS REALES · {realBlocks.length.toLocaleString()} bloques</span>}
-              {pitSelecto&&<button onClick={()=>setPitSelecto(null)} style={{fontSize:10,padding:"3px 8px",borderRadius:10,background:"rgba(0,212,255,.15)",color:"var(--acc)",border:"1px solid var(--acc)",cursor:"pointer"}}>✕ Pit {pitSelecto}</button>}
+                {realBlocks&&realBlocks.length>0&&<span style={{fontSize:9,padding:"2px 7px",borderRadius:8,background:"rgba(0,212,255,.12)",color:"var(--acc)",fontWeight:600}}>● DATOS REALES · {realBlocks.length.toLocaleString()} bloques</span>}
+                {pitSelecto&&<button onClick={()=>setPitSelecto(null)} style={{fontSize:10,padding:"3px 8px",borderRadius:10,background:"rgba(0,212,255,.15)",color:"var(--acc)",border:"1px solid var(--acc)",cursor:"pointer"}}>✕ Pit {pitSelecto}</button>}
                 <button onClick={()=>setTab("metal")} style={{background:"none",border:"1px solid var(--brd)",color:"var(--txt2)",borderRadius:8,padding:"7px 14px",fontSize:11,cursor:"pointer"}}>⚙ Rangos</button>
               </div>
             </div>
@@ -635,7 +637,6 @@ function App(){
 ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
 </script>
 <script>
-// Verificar carga de Three.js por separado
 (function(){
   var attempts=0;
   function check(){
