@@ -449,60 +449,64 @@ function ResultsDashboard({result,jobId}){
 // ── PitByPitChart ───────────────────────────────────────────────
 function PitByPitChart({pits,onSelect,selecto}){
   if(!pits||!pits.length) return null;
-  const maxTon=Math.max(...pits.map(p=>p.tonMin+p.tonEst),1);
+  const maxTon=Math.max(...pits.map(p=>(p.tonMin||0)+(p.tonEst||0)),1);
   const maxVan=Math.max(...pits.map(p=>Math.abs(p.vanBest||0)),1);
-  const minVan=Math.min(...pits.map(p=>p.vanWorst||0));
-  const optimo=pits.reduce((m,p)=>p.vanSpec>m.vanSpec?p:m,pits[0]);
+  const minVan=Math.min(...pits.map(p=>p.vanWorst||0),0);
+  const vanRange=maxVan-minVan||1;
+  const optimo=pits.reduce((m,p)=>(p.vanSpec||0)>(m.vanSpec||0)?p:m,pits[0]);
+  const BAR_H=80,CURVE_H=55,PAD_L=36,PAD_R=36,PAD_T=6,PAD_B=16,W=600;
+  const gap=(W-PAD_L-PAD_R)/pits.length;
+  const vanY=(v,h)=>PAD_T+BAR_H+h-(((v||0)-minVan)/vanRange)*h;
+  const curvePts=(key,h)=>pits.map((p,i)=>`${PAD_L+i*gap+gap/2},${Math.max(PAD_T+BAR_H,Math.min(PAD_T+BAR_H+h,vanY(p[key],h)))}`).join(" ");
   return(
-    <div style={{background:"var(--card)",borderRadius:10,border:"1px solid var(--brd)",padding:"6px 10px",marginTop:4}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-        <span style={{fontSize:11,fontWeight:600,color:"var(--txt)"}}>Pit-by-Pit</span>
-        <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
-          {[["rgba(250,200,0,.7)","Mineral"],["rgba(120,130,150,.5)","Estéril"],["#60a5fa","Best"],["var(--acc)","Spec"],["#f87171","Worst"]].map(([c,l])=>(
+    <div style={{background:"var(--card)",borderRadius:10,border:"1px solid var(--brd)",padding:"8px 10px",marginTop:4}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+        <span style={{fontSize:11,fontWeight:600,color:"var(--txt)"}}>Pozo por pozo</span>
+        <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+          {[["rgba(250,200,0,.85)","Mineral","rect"],["rgba(120,130,150,.6)","Estéril","rect"],["#60a5fa","Mejor","line"],["var(--acc)","Especulación","line"],["#f87171","El peor","line"]].map(([c,l,t])=>(
             <div key={l} style={{display:"flex",alignItems:"center",gap:3,fontSize:9,color:"var(--txt2)"}}>
-              <div style={{width:8,height:5,borderRadius:1,background:c}}/>{l}
+              <div style={{width:t==="line"?18:8,height:t==="line"?2:5,borderRadius:1,background:c}}/>{l}
             </div>
           ))}
           <span style={{fontSize:9,padding:"2px 7px",borderRadius:8,background:"rgba(0,212,255,.12)",color:"var(--acc)",fontWeight:600}}>Óptimo: Pit {optimo.pit}</span>
         </div>
       </div>
-      <div style={{display:"flex",alignItems:"flex-end",gap:1,height:45}}>
+      <svg width="100%" viewBox={`0 0 ${W} ${PAD_T+BAR_H+CURVE_H+PAD_B}`} style={{display:"block",cursor:"pointer"}}
+        onClick={e=>{
+          const rect=e.currentTarget.getBoundingClientRect();
+          const x=(e.clientX-rect.left)/(rect.width/W)-PAD_L;
+          const idx=Math.floor(x/gap);
+          if(idx>=0&&idx<pits.length){const p=pits[idx];onSelect(selecto===p.pit?null:p.pit);}
+        }}>
+        <line x1={PAD_L} y1={PAD_T} x2={PAD_L} y2={PAD_T+BAR_H} stroke="#2a3a4a" strokeWidth="0.5"/>
+        <text x={PAD_L-3} y={PAD_T+6} textAnchor="end" fontSize="7" fill="#6b8099">{maxTon.toFixed(1)}Mt</text>
+        <text x={PAD_L-3} y={PAD_T+BAR_H-1} textAnchor="end" fontSize="7" fill="#6b8099">0</text>
         {pits.map((p,i)=>{
-          const mH=Math.max(1,(p.tonMin/maxTon)*56);
-          const eH=Math.max(1,(p.tonEst/maxTon)*56);
-          const isOpt=p.pit===optimo.pit;
-          const isSel=selecto===p.pit;
+          const isOpt=p.pit===optimo.pit,isSel=selecto===p.pit;
+          const eH=Math.max(1,((p.tonEst||0)/maxTon)*BAR_H);
+          const mH=Math.max(1,((p.tonMin||0)/maxTon)*BAR_H);
+          const x=PAD_L+i*gap+gap*.1,bw=Math.max(1,gap*.8);
           return(
-            <div key={i} title={"Pit "+p.pit+" | "+p.tonMin+"Mt | $"+p.vanSpec?.toFixed(1)+"M"}
-              onClick={()=>onSelect(isSel?null:p.pit)}
-              style={{flex:1,display:"flex",flexDirection:"column",gap:1,cursor:"pointer",opacity:selecto&&!isSel?.5:1}}>
-              <div style={{width:"100%",height:eH,background:isSel?"rgba(200,210,230,.9)":isOpt?"rgba(180,190,210,.7)":"rgba(90,100,120,.4)",borderRadius:"1px 1px 0 0"}}/>
-              <div style={{width:"100%",height:mH,background:isSel?"#fde047":isOpt?"rgba(250,200,0,.85)":"rgba(250,200,0,.4)",borderRadius:"1px 1px 0 0"}}/>
-              {isOpt&&<div style={{width:"100%",height:1,background:"var(--acc)"}}/>}
-            </div>
+            <g key={i} opacity={selecto&&!isSel?0.35:1}>
+              <rect x={x} y={PAD_T+BAR_H-eH-mH} width={bw} height={eH} fill={isSel?"rgba(180,190,210,.9)":isOpt?"rgba(150,165,185,.8)":"rgba(80,95,115,.55)"}/>
+              <rect x={x} y={PAD_T+BAR_H-mH} width={bw} height={mH} fill={isSel?"#fde047":isOpt?"rgba(255,210,0,.95)":"rgba(250,200,0,.7)"}/>
+              {isOpt&&<rect x={x} y={PAD_T} width={bw} height={BAR_H} fill="rgba(0,212,255,.06)"/>}
+            </g>
           );
         })}
-      </div>
-      <div style={{display:"flex",alignItems:"flex-end",gap:1,height:20,marginTop:1,borderTop:"1px solid var(--brd)",paddingTop:2}}>
-        {pits.map((p,i)=>{
-          const range=maxVan-minVan||1;
-          const hB=Math.max(1,((p.vanBest-minVan)/range)*20);
-          const hS=Math.max(1,((p.vanSpec-minVan)/range)*20);
-          const hW=Math.max(1,((p.vanWorst-minVan)/range)*20);
-          return(
-            <div key={i} style={{flex:1,display:"flex",alignItems:"flex-end",justifyContent:"center",gap:.5,cursor:"pointer"}} onClick={()=>onSelect(selecto===p.pit?null:p.pit)}>
-              <div style={{width:1,height:hB,background:"#60a5fa",borderRadius:.5}}/>
-              <div style={{width:1.5,height:hS,background:"var(--acc)",borderRadius:.5}}/>
-              <div style={{width:1,height:hW,background:"#f87171",borderRadius:.5}}/>
-            </div>
-          );
-        })}
-      </div>
-      <div style={{display:"flex",justifyContent:"space-between",marginTop:3}}>
-        <span style={{fontSize:8,color:"var(--txt2)"}}>Pit 1</span>
-        <span style={{fontSize:8,color:"var(--txt2)"}}>Revenue Factor</span>
-        <span style={{fontSize:8,color:"var(--txt2)"}}>Pit {pits.length}</span>
-      </div>
+        <line x1={PAD_L} y1={PAD_T+BAR_H} x2={W-PAD_R} y2={PAD_T+BAR_H} stroke="#2a3a4a" strokeWidth="1"/>
+        <line x1={W-PAD_R} y1={PAD_T+BAR_H} x2={W-PAD_R} y2={PAD_T+BAR_H+CURVE_H} stroke="#2a3a4a" strokeWidth="0.5"/>
+        <text x={W-PAD_R+3} y={PAD_T+BAR_H+8} textAnchor="start" fontSize="7" fill="#6b8099">{minVan.toFixed(0)}M</text>
+        <text x={W-PAD_R+3} y={PAD_T+BAR_H+CURVE_H} textAnchor="start" fontSize="7" fill="#6b8099">{maxVan.toFixed(0)}M</text>
+        <line x1={PAD_L} y1={PAD_T+BAR_H+CURVE_H/2} x2={W-PAD_R} y2={PAD_T+BAR_H+CURVE_H/2} stroke="#1f2937" strokeWidth="0.3" strokeDasharray="3,3"/>
+        <polyline points={curvePts("vanBest",CURVE_H)} fill="none" stroke="#60a5fa" strokeWidth="1.5" strokeDasharray="5,3"/>
+        <polyline points={curvePts("vanSpec",CURVE_H)} fill="none" stroke="#00d4ff" strokeWidth="2.5"/>
+        <polyline points={curvePts("vanWorst",CURVE_H)} fill="none" stroke="#f87171" strokeWidth="1.5" strokeDasharray="5,3"/>
+        {optimo&&<line x1={PAD_L+optimo.pit*gap-gap/2} y1={PAD_T} x2={PAD_L+optimo.pit*gap-gap/2} y2={PAD_T+BAR_H+CURVE_H} stroke="var(--acc)" strokeWidth="1" strokeDasharray="3,2"/>}
+        <text x={PAD_L} y={PAD_T+BAR_H+CURVE_H+PAD_B-3} fontSize="7" fill="#6b8099">Pit 1</text>
+        <text x={W/2} y={PAD_T+BAR_H+CURVE_H+PAD_B-3} textAnchor="middle" fontSize="7" fill="#6b8099">Factor de ingresos</text>
+        <text x={W-PAD_R} y={PAD_T+BAR_H+CURVE_H+PAD_B-3} textAnchor="end" fontSize="7" fill="#6b8099">Pit {pits.length}</text>
+      </svg>
     </div>
   );
 }
