@@ -2,6 +2,14 @@
   "buildCommand": null,
   "outputDirectory": ".",
   "framework": null,
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
+      ]
+    }
+  ],
   "rewrites": [
     { "source": "/(.*)", "destination": "/inicio.html" }
   ]
