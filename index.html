@@ -162,7 +162,7 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,loadingBlocks}){
   useEffect(()=>{
     if(typeof THREE==="undefined")return;
     const cv=cvRef.current;if(!cv)return;
-    const W=cv.clientWidth||600,H=480;
+    const W=cv.clientWidth||600,H=320;
     const renderer=new THREE.WebGLRenderer({canvas:cv,antialias:true});
     renderer.setPixelRatio(Math.min(devicePixelRatio,2));
     renderer.setSize(W,H,false);
@@ -203,7 +203,7 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,loadingBlocks}){
         ))}
       </div>
       <div style={{position:"relative",borderRadius:10,overflow:"hidden",border:"1px solid var(--brd)"}}>
-        <canvas ref={cvRef} style={{width:"100%",height:480,display:"block",cursor:"grab"}}/>
+        <canvas ref={cvRef} style={{width:"100%",height:320,display:"block",cursor:"grab"}}/>
         {hovered && (
           <div style={{position:"absolute",bottom:10,left:10,background:"rgba(255,255,255,.95)",border:"1px solid var(--brd)",borderRadius:8,padding:"10px 12px",fontSize:11,color:"var(--txt)"}}>
             <div style={{fontWeight:600,marginBottom:4}}>Bloque ({hovered.ix},{hovered.iy},{hovered.iz})</div>
@@ -454,7 +454,7 @@ function PitByPitChart({pits,onSelect,selecto}){
   const minVan=Math.min(...pits.map(p=>p.vanWorst||0),0);
   const vanRange=maxVan-minVan||1;
   const optimo=pits.reduce((m,p)=>(p.vanSpec||0)>(m.vanSpec||0)?p:m,pits[0]);
-  const BAR_H=80,CURVE_H=55,PAD_L=36,PAD_R=36,PAD_T=6,PAD_B=16,W=600;
+  const BAR_H=55,CURVE_H=38,PAD_L=36,PAD_R=36,PAD_T=6,PAD_B=16,W=600;
   const gap=(W-PAD_L-PAD_R)/pits.length;
   const vanY=(v,h)=>PAD_T+BAR_H+h-(((v||0)-minVan)/vanRange)*h;
   const curvePts=(key,h)=>pits.map((p,i)=>`${PAD_L+i*gap+gap/2},${Math.max(PAD_T+BAR_H,Math.min(PAD_T+BAR_H+h,vanY(p[key],h)))}`).join(" ");
