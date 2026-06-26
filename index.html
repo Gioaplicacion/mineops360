@@ -54,7 +54,32 @@ const DEMO=(()=>{const b=[];let s=7;const rng=x=>{const v=Math.sin(x+1)*99991;re
     const rawLey=Math.max(0,(0.58-dist*.034)*zf+rng(s++)*.14-.04+(rng(s++)-.5)*.07);
     b.push({ix,iy,iz,rawLey,fase:Math.min(4,1+Math.floor(dist/3.5+(iz/NZ)*1.5)),per:Math.min(30,Math.floor(dist*.8+(NZ-iz)*.4+3+rng(s++)*4)+1),ton:BS*BS*BZ*2.5})
   }return b})();
-const STAGES=[{label:"Modelo",f:()=>true},{label:"¿Cuánto?",f:(b)=>{const cx=NX/2,cy=NY/2,pr=1-(b.iz/NZ);return Math.hypot(b.ix-cx,b.iy-cy)<(NX/2)*(1-pr*0.65);}},{label:"¿Cómo? Pit",f:(b)=>{const cx=NX/2,cy=NY/2,pr=1-(b.iz/NZ);return Math.hypot(b.ix-cx,b.iy-cy)<(NX/2-1)*(1-pr*0.72);}},{label:"¿Cómo? Fases",f:b=>b.fase<=4},{label:"¿Cuándo?",f:b=>b.per>0}];
+
+// 4 stages: Modelo, ¿Cuánto?, ¿Cómo? Fases, ¿Cuándo?
+const STAGES=[
+  {label:"Modelo",      f:()=>true},
+  {label:"¿Cuánto?",   f:(b)=>{const cx=NX/2,cy=NY/2,pr=1-(b.iz/NZ);return Math.hypot(b.ix-cx,b.iy-cy)<(NX/2)*(1-pr*0.65);}},
+  {label:"¿Cómo? Fases",f:b=>b.fase<=4},
+  {label:"¿Cuándo?",   f:b=>b.per>0}
+];
+
+// Filtros para bloques reales por stage
+function stageFilterReal(b, stage, totalFases){
+  if(stage===0) return true; // Modelo: todo
+  if(stage===1){
+    // ¿Cuánto?: solo bloques con ley > 0 (mineral clasificado)
+    return (b.Cu||b.cu||b.ley||0) > 0;
+  }
+  if(stage===2){
+    // ¿Cómo? Fases: mostrar por fase (todas las fases <= maxFase)
+    return b.fase <= (totalFases||4);
+  }
+  if(stage===3){
+    // ¿Cuándo?: bloques con período asignado
+    return b.per > 0;
+  }
+  return true;
+}
 
 // ── Viewer3D ────────────────────────────────────────────────────
 function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,loadingBlocks}){
@@ -62,6 +87,7 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,loadingBlocks}){
   const [stage,setStage]=useState(0),[zSlice,setZSlice]=useState(0),[zMax,setZMax]=useState(100),[hovered,setHovered]=useState(null);
   const zSliceRef=useRef(0);
   const zMaxRef=useRef(100);
+  const stageRef=useRef(0);
   const cfgRef=useRef(metalConfig);
   useEffect(()=>{cfgRef.current=metalConfig},[metalConfig]);
   const pitSelectoRef=useRef(null);
@@ -71,6 +97,7 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,loadingBlocks}){
   useEffect(()=>{realBlocksRef.current=realBlocks||null;if(realBlocks)rebuild();},[realBlocks]);
   useEffect(()=>{zSliceRef.current=zSlice;rebuild();},[zSlice]);
   useEffect(()=>{zMaxRef.current=zMax;rebuild();},[zMax]);
+  useEffect(()=>{stageRef.current=stage;rebuild();},[stage]);
 
   const rebuild=useCallback(()=>{
     const{pivot}=threeRef.current;if(!pivot)return;
@@ -78,6 +105,7 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,loadingBlocks}){
     const meshes=[],cfg=cfgRef.current;
     const rangos=cfg?.rangos||[],oor=cfg?.oorColor||"#b8c2d4";
     const real=realBlocksRef.current;
+    const currentStage=stageRef.current;
 
     if(real&&real.length>0){
       // ── BLOQUES REALES ──────────────────────────────────────
@@ -89,14 +117,26 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,loadingBlocks}){
       const scale=400/Math.max(rangeX,rangeY,rangeZ);
       const bsz=Math.max(4,scale*Math.min(rangeX,rangeY,rangeZ)/Math.cbrt(real.length)*0.9);
       const bGeo=new THREE.BoxGeometry(bsz,bsz*0.8,bsz);
+      // Calcular max fase y periodo para filtros
+      const maxFase=Math.max(...real.map(b=>b.fase||1));
+      // Filtro pit selecto
+      const ps=pitSelectoRef.current;
+      const nPits=totalPitsRef.current||20;
       real.forEach(b=>{
         const zp=((b.Z-minZ)/rangeZ)*100;
         if(zp<zSliceRef.current||zp>zMaxRef.current)return;
+        // Filtro por stage
+        if(!stageFilterReal(b,currentStage,maxFase))return;
+        // Filtro por pit selecto (usa fase como proxy del pit)
+        if(ps){
+          const faseLimite=Math.max(1,Math.round((ps/nPits)*maxFase));
+          if(b.fase>faseLimite)return;
+        }
         const ley=b.Cu||b.cu||b.ley||0;
         const[r,g,bv]=colorForLey(ley,rangos,oor);
         const m=new THREE.Mesh(bGeo,new THREE.MeshLambertMaterial({color:new THREE.Color(r,g,bv)}));
         m.position.set((b.X-minX-(rangeX/2))*scale,(b.Z-minZ-(rangeZ/2))*scale,(b.Y-minY-(rangeY/2))*scale);
-        m.userData={...b,ley,ix:Math.round((b.X-minX)/rangeX*NX),iy:Math.round((b.Y-minY)/rangeY*NY),iz:Math.round((b.Z-minZ)/rangeZ*NZ),fase:b.fase||1,per:b.per||1};
+        m.userData={...b,ley,ix:Math.round((b.X-minX)/rangeX*NX),iy:Math.round((b.Y-minY)/rangeY*NY),iz:Math.round((b.Z-minZ)/rangeZ*NZ)};
         pivot.add(m);meshes.push(m);
       });
     } else {
@@ -108,7 +148,7 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,loadingBlocks}){
         const _izPct=(b.iz/(NZ-1))*100;if(_izPct<zSliceRef.current||_izPct>zMaxRef.current)return;
         const _ps=pitSelectoRef.current;
         if(_ps){const _nPits=totalPitsRef.current||20;const _rf=_ps/_nPits;const _cx=NX/2,_cy=NY/2;const _pr=1-(b.iz/NZ);const _radio=(_rf*(NX/2))*(1-_pr*0.65);if(Math.hypot(b.ix-_cx,b.iy-_cy)>_radio)return;}
-        if(!STAGES[stage].f(b))return;
+        if(!STAGES[currentStage].f(b))return;
         const ley=(b.rawLey/.8)*mx;
         const[r,g,bv]=colorForLey(ley,rangos,oor);
         const m=new THREE.Mesh(dGeo,new THREE.MeshLambertMaterial({color:new THREE.Color(r,g,bv)}));
@@ -117,7 +157,7 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,loadingBlocks}){
       });
     }
     threeRef.current.meshes=meshes;
-  },[stage,zSlice,zMax]);
+  },[]);
 
   useEffect(()=>{
     if(typeof THREE==="undefined")return;
@@ -150,7 +190,6 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,loadingBlocks}){
     return()=>{cancelAnimationFrame(raf);renderer.dispose()};
   },[]);
 
-  useEffect(()=>{rebuild()},[rebuild]);
   useEffect(()=>{rebuild()},[metalConfig]);
 
   const metal=metalConfig?.metal||METALS[0];
@@ -180,7 +219,7 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,loadingBlocks}){
       <div style={{background:"rgba(255,255,255,.03)",borderRadius:8,padding:"8px 10px",marginTop:4}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
           <span style={{fontSize:9,color:"var(--txt2)",fontWeight:600,textTransform:"uppercase",letterSpacing:".05em"}}>Cortes de Sección</span>
-          <button onClick={()=>{setZSlice(0);if(threeRef.current.rot){threeRef.current.rot={x:.42,y:.58};threeRef.current.zoom=1;}}} style={{fontSize:9,background:"none",border:"1px solid var(--brd)",color:"var(--txt2)",borderRadius:4,padding:"1px 7px",cursor:"pointer"}}>↺</button>
+          <button onClick={()=>{setZSlice(0);setZMax(100);if(threeRef.current.rot){threeRef.current.rot={x:.42,y:.58};threeRef.current.zoom=1;}}} style={{fontSize:9,background:"none",border:"1px solid var(--brd)",color:"var(--txt2)",borderRadius:4,padding:"1px 7px",cursor:"pointer"}}>↺</button>
         </div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"6px 10px"}}>
           <div>
