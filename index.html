@@ -137,47 +137,102 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,loadingBlocks,fas
       const spacingX=gridSpacing(xs)*scale;
       const spacingY=gridSpacing(ys)*scale;
       const spacingZ=gridSpacing(zs)*scale;
+      const rawSpX=gridSpacing(xs),rawSpY=gridSpacing(ys),rawSpZ=gridSpacing(zs);
       const bGeoX=new THREE.BoxGeometry(spacingX*1.6,spacingZ*1.6,spacingY*1.6);
       const bGeo=bGeoX;
       const edgeMat=new THREE.LineBasicMaterial({color:0x0a0e14,transparent:true,opacity:0.25});
-      // Calcular max fase y periodo para filtros
       const maxFase=Math.max(...real.map(b=>b.fase||1));
-      // Filtro pit selecto
       const ps=pitSelectoRef.current;
       const nPits=totalPitsRef.current||20;
-      const maxFaseGlobal=Math.max(...real.map(b=>b.fase||1),1);
+
+      // Construir set de coordenadas reales para lookup rápido + mapa de bloques reales por key
+      const realMap=new Map();
       real.forEach(b=>{
-        const zp=((b.Z-minZ)/rangeZ)*100;
-        if(zp<zSliceRef.current||zp>zMaxRef.current)return;
-        // Filtro por stage
-        if(!stageFilterReal(b,currentStage,maxFase))return;
-        // Filtro por fases activas (toggle individual)
-        const fa=fasesActivasRef.current;
-        if(fa&&fa.size>0&&!fa.has(b.fase||1))return;
-        // Filtro por pit selecto (usa fase + período como proxy del pit, más granular)
-        if(ps){
-          const maxPer=Math.max(...real.map(x=>x.per||1),1);
-          const rf=ps/nPits;
-          const perLimite=Math.max(1,Math.ceil(rf*maxPer));
-          if((b.per||1)>perLimite)return;
-        }
-        const ley=b.Cu||b.cu||b.ley||0;
-        let r,g,bv;
-        if(currentStage===2){
-          const faseIdx=((b.fase||1)-1)%FASE_COLORS.length;
-          [r,g,bv]=hexRgb(FASE_COLORS[faseIdx]);
-        } else {
-          [r,g,bv]=colorForLey(ley,rangos,oor);
-        }
-        const m=new THREE.Mesh(bGeo,new THREE.MeshLambertMaterial({color:new THREE.Color(r,g,bv)}));
-        m.position.set((b.X-minX-(rangeX/2))*scale,(b.Z-minZ-(rangeZ/2))*scale,(b.Y-minY-(rangeY/2))*scale);
-        m.userData={...b,ley,ix:Math.round((b.X-minX)/rangeX*NX),iy:Math.round((b.Y-minY)/rangeY*NY),iz:Math.round((b.Z-minZ)/rangeZ*NZ)};
-        pivot.add(m);meshes.push(m);
-        const edges=new THREE.EdgesGeometry(bGeo);
-        const line=new THREE.LineSegments(edges,edgeMat);
-        line.position.copy(m.position);
-        pivot.add(line);
+        const kx=Math.round(b.X/rawSpX),ky=Math.round(b.Y/rawSpY),kz=Math.round(b.Z/rawSpZ);
+        realMap.set(`${kx},${ky},${kz}`,b);
       });
+
+      if(currentStage===0){
+        // ── MODELO: relleno completo con InstancedMesh (incluye estéril gris) ──
+        // Bounding box local por capa Z para no generar celdas innecesarias
+        const porCapa=new Map();
+        real.forEach(b=>{
+          const kz=Math.round(b.Z/rawSpZ);
+          if(!porCapa.has(kz))porCapa.set(kz,{minKx:Infinity,maxKx:-Infinity,minKy:Infinity,maxKy:-Infinity});
+          const kx=Math.round(b.X/rawSpX),ky=Math.round(b.Y/rawSpY);
+          const c=porCapa.get(kz);
+          c.minKx=Math.min(c.minKx,kx);c.maxKx=Math.max(c.maxKx,kx);
+          c.minKy=Math.min(c.minKy,ky);c.maxKy=Math.max(c.maxKy,ky);
+        });
+        let cellList=[];
+        porCapa.forEach((c,kz)=>{
+          for(let kx=c.minKx;kx<=c.maxKx;kx++){
+            for(let ky=c.minKy;ky<=c.maxKy;ky++){
+              cellList.push({kx,ky,kz});
+            }
+          }
+        });
+        const total=cellList.length;
+        const inst=new THREE.InstancedMesh(bGeo,new THREE.MeshLambertMaterial({vertexColors:true}),total);
+        inst.instanceColor=new THREE.InstancedBufferAttribute(new Float32Array(total*3),3);
+        const dummy=new THREE.Object3D();
+        let idx=0;
+        cellList.forEach(({kx,ky,kz})=>{
+          const realB=realMap.get(`${kx},${ky},${kz}`);
+          const bx=kx*rawSpX,by=ky*rawSpY,bz=kz*rawSpZ;
+          const zp=((bz-minZ)/rangeZ)*100;
+          if(zp<zSliceRef.current||zp>zMaxRef.current)return;
+          let r,g,bv;
+          if(realB){
+            const ley=realB.Cu||realB.cu||realB.ley||0;
+            [r,g,bv]=colorForLey(ley,rangos,oor);
+          } else {
+            [r,g,bv]=[0.42,0.46,0.5]; // gris estéril/relleno
+          }
+          dummy.position.set((bx-minX-(rangeX/2))*scale,(bz-minZ-(rangeZ/2))*scale,(by-minY-(rangeY/2))*scale);
+          dummy.updateMatrix();
+          inst.setMatrixAt(idx,dummy.matrix);
+          inst.setColorAt(idx,new THREE.Color(r,g,bv));
+          idx++;
+        });
+        inst.count=idx;
+        inst.instanceMatrix.needsUpdate=true;
+        if(inst.instanceColor)inst.instanceColor.needsUpdate=true;
+        inst.userData={isInstanced:true,realMap,minX,minY,minZ,rangeX,rangeY,rangeZ,scale,rawSpX,rawSpY,rawSpZ};
+        pivot.add(inst);
+        threeRef.current.instancedMesh=inst;
+      } else {
+        // ── OTROS MÓDULOS: solo bloques reales con filtros (¿Cuánto?, Fases, ¿Cuándo?) ──
+        real.forEach(b=>{
+          const zp=((b.Z-minZ)/rangeZ)*100;
+          if(zp<zSliceRef.current||zp>zMaxRef.current)return;
+          if(!stageFilterReal(b,currentStage,maxFase))return;
+          const fa=fasesActivasRef.current;
+          if(fa&&fa.size>0&&!fa.has(b.fase||1))return;
+          if(ps){
+            const maxPer=Math.max(...real.map(x=>x.per||1),1);
+            const rf=ps/nPits;
+            const perLimite=Math.max(1,Math.ceil(rf*maxPer));
+            if((b.per||1)>perLimite)return;
+          }
+          const ley=b.Cu||b.cu||b.ley||0;
+          let r,g,bv;
+          if(currentStage===2){
+            const faseIdx=((b.fase||1)-1)%FASE_COLORS.length;
+            [r,g,bv]=hexRgb(FASE_COLORS[faseIdx]);
+          } else {
+            [r,g,bv]=colorForLey(ley,rangos,oor);
+          }
+          const m=new THREE.Mesh(bGeo,new THREE.MeshLambertMaterial({color:new THREE.Color(r,g,bv)}));
+          m.position.set((b.X-minX-(rangeX/2))*scale,(b.Z-minZ-(rangeZ/2))*scale,(b.Y-minY-(rangeY/2))*scale);
+          m.userData={...b,ley,ix:Math.round((b.X-minX)/rangeX*NX),iy:Math.round((b.Y-minY)/rangeY*NY),iz:Math.round((b.Z-minZ)/rangeZ*NZ)};
+          pivot.add(m);meshes.push(m);
+          const edges=new THREE.EdgesGeometry(bGeo);
+          const line=new THREE.LineSegments(edges,edgeMat);
+          line.position.copy(m.position);
+          pivot.add(line);
+        });
+      }
     } else {
       // ── BLOQUES DEMO ────────────────────────────────────────
       const ox=(NX-1)*BS/2,oy=(NY-1)*BS/2,oz=(NZ-1)*BZ/2;
@@ -196,6 +251,7 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,loadingBlocks,fas
       });
     }
     threeRef.current.meshes=meshes;
+    if(!threeRef.current.instancedMesh||threeRef.current.instancedMesh.parent!==pivot)threeRef.current.instancedMesh=null;
   },[]);
 
   useEffect(()=>{
@@ -220,8 +276,32 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,loadingBlocks,fas
       const rect=cv.getBoundingClientRect();
       const mv=new THREE.Vector2(((e.clientX-rect.left)/rect.width)*2-1,-((e.clientY-rect.top)/rect.height)*2+1);
       const ray=new THREE.Raycaster();ray.setFromCamera(mv,threeRef.current.cam);
-      const hits=ray.intersectObjects(threeRef.current.meshes||[]);
-      if(hits.length)setHovered(hits[0].object.userData);
+      const objs=[...(threeRef.current.meshes||[])];
+      if(threeRef.current.instancedMesh)objs.push(threeRef.current.instancedMesh);
+      const hits=ray.intersectObjects(objs);
+      if(hits.length){
+        const hit=hits[0];
+        if(hit.object.userData&&hit.object.userData.isInstanced&&typeof hit.instanceId==="number"){
+          const ud=hit.object.userData;
+          const m=hit.object.matrixWorld;
+          // Recuperar posición de esa instancia para identificar el bloque
+          const mat=new THREE.Matrix4();
+          hit.object.getMatrixAt(hit.instanceId,mat);
+          const pos=new THREE.Vector3();pos.setFromMatrixPosition(mat);
+          const bx=(pos.x/ud.scale)+ud.minX+(ud.rangeX/2);
+          const by=(pos.z/ud.scale)+ud.minY+(ud.rangeY/2);
+          const bz=(pos.y/ud.scale)+ud.minZ+(ud.rangeZ/2);
+          const kx=Math.round(bx/ud.rawSpX),ky=Math.round(by/ud.rawSpY),kz=Math.round(bz/ud.rawSpZ);
+          const realB=ud.realMap.get(`${kx},${ky},${kz}`);
+          if(realB){
+            setHovered({...realB,ley:realB.Cu||realB.cu||realB.ley||0,ix:kx,iy:ky,iz:kz,fase:realB.fase||1,per:realB.per||1});
+          } else {
+            setHovered({ix:kx,iy:ky,iz:kz,ley:0,fase:0,per:0,esEsteril:true});
+          }
+        } else {
+          setHovered(hit.object.userData);
+        }
+      }
     });
     new ResizeObserver(()=>{const w=cv.clientWidth;renderer.setSize(w,H,false);cam.aspect=w/H;cam.updateProjectionMatrix()}).observe(cv);
     let raf;const loop=()=>{raf=requestAnimationFrame(loop);const s=threeRef.current;s.pivot.rotation.x=s.rot.x;s.pivot.rotation.y=s.rot.y;s.cam.position.z=700/s.zoom;renderer.render(scene,cam)};
@@ -270,8 +350,12 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,loadingBlocks,fas
         {hovered && (
           <div style={{position:"absolute",bottom:10,left:10,background:"rgba(255,255,255,.95)",border:"1px solid var(--brd)",borderRadius:8,padding:"10px 12px",fontSize:11,color:"var(--txt)"}}>
             <div style={{fontWeight:600,marginBottom:4}}>Bloque ({hovered.ix},{hovered.iy},{hovered.iz})</div>
-            <div>Ley: <span style={{color:"var(--ore)",fontFamily:"monospace",fontWeight:600}}>{hovered.ley?.toFixed(3)} {metal.unit}</span></div>
-            <div style={{color:"var(--txt2)"}}>Fase {hovered.fase} · Período {hovered.per}</div>
+            {hovered.esEsteril?
+              <div style={{color:"var(--txt2)",fontStyle:"italic"}}>Estéril / sin datos (relleno)</div>
+            :<>
+              <div>Ley: <span style={{color:"var(--ore)",fontFamily:"monospace",fontWeight:600}}>{hovered.ley?.toFixed(3)} {metal.unit}</span></div>
+              <div style={{color:"var(--txt2)"}}>Fase {hovered.fase} · Período {hovered.per}</div>
+            </>}
             <button onClick={()=>setHovered(null)} style={{position:"absolute",top:6,right:8,background:"none",border:"none",color:"var(--txt2)",cursor:"pointer",fontSize:16}}>×</button>
           </div>
         )}
