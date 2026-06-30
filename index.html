@@ -124,9 +124,15 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,loadingBlocks,fas
       function gridSpacing(arr){
         const uniq=[...new Set(arr.map(v=>Math.round(v*1000)/1000))].sort((a,b)=>a-b);
         if(uniq.length<2)return 1;
-        let minDiff=Infinity;
-        for(let i=1;i<uniq.length;i++){const d=uniq[i]-uniq[i-1];if(d>0.001&&d<minDiff)minDiff=d;}
-        return minDiff===Infinity?1:minDiff;
+        const diffs=[];
+        for(let i=1;i<uniq.length;i++){const d=uniq[i]-uniq[i-1];if(d>0.001)diffs.push(Math.round(d*1000)/1000);}
+        if(!diffs.length)return 1;
+        // Moda: el valor de espaciado que más se repite es el espaciado real de la malla
+        const freq={};
+        diffs.forEach(d=>{freq[d]=(freq[d]||0)+1;});
+        let modeVal=diffs[0],modeCount=0;
+        for(const k in freq){if(freq[k]>modeCount){modeCount=freq[k];modeVal=parseFloat(k);}}
+        return modeVal;
       }
       const spacingX=gridSpacing(xs)*scale;
       const spacingY=gridSpacing(ys)*scale;
