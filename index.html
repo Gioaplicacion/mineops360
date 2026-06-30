@@ -37,6 +37,7 @@ const METALS = [
   {sym:"Mo",name:"Molibdeno",unit:"%",   col:"#cc8844",presets:[0,.02,.05,.1,.2],colors:["#b8c2d4","#f8ddb0","#e0a040","#c06010","#6a2000"]},
 ];
 const QUICK = ["Cu","Au","Ag","Ni","Li","Co"];
+const FASE_COLORS=["#3b82f6","#22c55e","#f97316","#ef4444","#a855f7","#eab308","#06b6d4","#ec4899"];
 const NX=18,NY=14,NZ=10,BS=20,BZ=15;
 
 function defaultRangos(sym){
@@ -115,13 +116,17 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,loadingBlocks}){
       const minZ=Math.min(...zs),maxZ=Math.max(...zs);
       const rangeX=maxX-minX||1,rangeY=maxY-minY||1,rangeZ=maxZ-minZ||1;
       const scale=400/Math.max(rangeX,rangeY,rangeZ);
-      const bsz=Math.max(6,scale*Math.min(rangeX,rangeY,rangeZ)/Math.cbrt(real.length)*1.4);
-      const bGeo=new THREE.BoxGeometry(bsz,bsz*0.8,bsz);
+      const cellX=(rangeX/Math.cbrt(real.length))*scale;
+      const cellY=(rangeY/Math.cbrt(real.length))*scale;
+      const cellZ=(rangeZ/Math.cbrt(real.length))*scale;
+      const bsz=Math.max(6,Math.max(cellX,cellY,cellZ)*1.05);
+      const bGeo=new THREE.BoxGeometry(bsz,bsz,bsz);
       // Calcular max fase y periodo para filtros
       const maxFase=Math.max(...real.map(b=>b.fase||1));
       // Filtro pit selecto
       const ps=pitSelectoRef.current;
       const nPits=totalPitsRef.current||20;
+      const maxFaseGlobal=Math.max(...real.map(b=>b.fase||1),1);
       real.forEach(b=>{
         const zp=((b.Z-minZ)/rangeZ)*100;
         if(zp<zSliceRef.current||zp>zMaxRef.current)return;
@@ -129,11 +134,17 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,loadingBlocks}){
         if(!stageFilterReal(b,currentStage,maxFase))return;
         // Filtro por pit selecto (usa fase como proxy del pit)
         if(ps){
-          const faseLimite=Math.max(1,Math.round((ps/nPits)*maxFase));
-          if(b.fase>faseLimite)return;
+          const faseLimite=Math.max(1,Math.ceil((ps/nPits)*maxFaseGlobal));
+          if((b.fase||1)>faseLimite)return;
         }
         const ley=b.Cu||b.cu||b.ley||0;
-        const[r,g,bv]=colorForLey(ley,rangos,oor);
+        let r,g,bv;
+        if(currentStage===2){
+          const faseIdx=((b.fase||1)-1)%FASE_COLORS.length;
+          [r,g,bv]=hexRgb(FASE_COLORS[faseIdx]);
+        } else {
+          [r,g,bv]=colorForLey(ley,rangos,oor);
+        }
         const m=new THREE.Mesh(bGeo,new THREE.MeshLambertMaterial({color:new THREE.Color(r,g,bv)}));
         m.position.set((b.X-minX-(rangeX/2))*scale,(b.Z-minZ-(rangeZ/2))*scale,(b.Y-minY-(rangeY/2))*scale);
         m.userData={...b,ley,ix:Math.round((b.X-minX)/rangeX*NX),iy:Math.round((b.Y-minY)/rangeY*NY),iz:Math.round((b.Z-minZ)/rangeZ*NZ)};
@@ -471,7 +482,7 @@ function PitByPitChart({pits,onSelect,selecto}){
           <span style={{fontSize:9,padding:"2px 7px",borderRadius:8,background:"rgba(0,212,255,.12)",color:"var(--acc)",fontWeight:600}}>Óptimo: Pit {optimo.pit}</span>
         </div>
       </div>
-      <svg width="100%" viewBox={`0 0 ${W} ${PAD_T+BAR_H+CURVE_H+PAD_B}`} style={{display:"block",cursor:"pointer"}}
+      <svg width="100%" height="100%" viewBox={`0 0 ${W} ${PAD_T+BAR_H+CURVE_H+PAD_B}`} preserveAspectRatio="none" style={{display:"block",cursor:"pointer"}}
         onClick={e=>{
           const rect=e.currentTarget.getBoundingClientRect();
           const x=(e.clientX-rect.left)/(rect.width/W)-PAD_L;
@@ -511,6 +522,35 @@ function PitByPitChart({pits,onSelect,selecto}){
   );
 }
 
+// ── ResizablePitChart (con handle de redimensionado) ─────────────
+function ResizablePitChart({pits,onSelect,selecto}){
+  const [height,setHeight]=useState(160);
+  const dragRef=useRef(false);
+  const startRef=useRef({y:0,h:160});
+  const onDown=e=>{dragRef.current=true;startRef.current={y:e.clientY,h:height};e.preventDefault();};
+  useEffect(()=>{
+    const onMove=e=>{
+      if(!dragRef.current)return;
+      const dy=startRef.current.y-e.clientY;
+      setHeight(Math.max(100,Math.min(400,startRef.current.h+dy)));
+    };
+    const onUp=()=>dragRef.current=false;
+    window.addEventListener("mousemove",onMove);
+    window.addEventListener("mouseup",onUp);
+    return()=>{window.removeEventListener("mousemove",onMove);window.removeEventListener("mouseup",onUp);};
+  },[]);
+  return(
+    <div style={{position:"relative"}}>
+      <div onMouseDown={onDown} style={{height:6,cursor:"ns-resize",display:"flex",alignItems:"center",justifyContent:"center",background:"var(--sur)"}}>
+        <div style={{width:36,height:3,borderRadius:2,background:"var(--brd)"}}/>
+      </div>
+      <div style={{height,overflow:"hidden"}}>
+        <PitByPitChart pits={pits} onSelect={onSelect} selecto={selecto}/>
+      </div>
+    </div>
+  );
+}
+
 // ── App principal ───────────────────────────────────────────────
 function App(){
   const [tab,setTab]=useState("proyecto");
@@ -536,13 +576,21 @@ function App(){
             setResult(data);setStatus("done");setTab("resultados");loadRealBlocks(jid);
             const van=data.van_total_MUSD||30;
             const n=20;
+            const optIdx=Math.round(n*0.62); // pit óptimo cerca del 60-65% del RF
             const pd=Array.from({length:n},(_,i)=>{
               const rf=(i+1)/n;
-              const v=van*(rf<0.6?rf/0.6:(1-(rf-0.6)*1.2));
+              // Curva ascendente hasta el óptimo, luego decrece suavemente (forma realista de NPV vs RF)
+              let v;
+              if(i<=optIdx){
+                v=van*(0.15+0.85*Math.pow((i+1)/(optIdx+1),0.85));
+              } else {
+                const declineProgress=(i-optIdx)/(n-optIdx);
+                v=van*(1-declineProgress*0.18);
+              }
               return {pit:i+1,rf:Math.round(rf*100)/100,
                 tonMin:Math.round(rf*3*1.1*10)/10,
                 tonEst:Math.round(rf*1.8*10)/10,
-                vanBest:v*1.15,vanWorst:v*0.70,vanSpec:v};
+                vanBest:v*1.15,vanWorst:v*0.72,vanSpec:v};
             });
             setPitData(pd);return;
           }
@@ -672,7 +720,7 @@ function App(){
           </div>
         </div>
       </div>
-      {pitData&&<PitByPitChart pits={pitData} onSelect={setPitSelecto} selecto={pitSelecto}/>}
+      {pitData&&<ResizablePitChart pits={pitData} onSelect={setPitSelecto} selecto={pitSelecto}/>}
     </div>
   );
 }
