@@ -116,12 +116,20 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,loadingBlocks}){
       const minZ=Math.min(...zs),maxZ=Math.max(...zs);
       const rangeX=maxX-minX||1,rangeY=maxY-minY||1,rangeZ=maxZ-minZ||1;
       const scale=400/Math.max(rangeX,rangeY,rangeZ);
-      const cellX=(rangeX/Math.cbrt(real.length))*scale;
-      const cellY=(rangeY/Math.cbrt(real.length))*scale;
-      const cellZ=(rangeZ/Math.cbrt(real.length))*scale;
-      const bsz=Math.max(6,Math.max(cellX,cellY,cellZ)*1.05);
-      const bGeo=new THREE.BoxGeometry(bsz,bsz,bsz);
-      const edgeMat=new THREE.LineBasicMaterial({color:0x0a0e14,transparent:true,opacity:0.35});
+      // Calcular el espaciado real de la malla a partir de las coordenadas únicas (no asumir cubo)
+      function gridSpacing(arr){
+        const uniq=[...new Set(arr.map(v=>Math.round(v*1000)/1000))].sort((a,b)=>a-b);
+        if(uniq.length<2)return 1;
+        let minDiff=Infinity;
+        for(let i=1;i<uniq.length;i++){const d=uniq[i]-uniq[i-1];if(d>0.001&&d<minDiff)minDiff=d;}
+        return minDiff===Infinity?1:minDiff;
+      }
+      const spacingX=gridSpacing(xs)*scale;
+      const spacingY=gridSpacing(ys)*scale;
+      const spacingZ=gridSpacing(zs)*scale;
+      const bGeoX=new THREE.BoxGeometry(spacingX*1.0,spacingZ*1.0,spacingY*1.0);
+      const bGeo=bGeoX;
+      const edgeMat=new THREE.LineBasicMaterial({color:0x0a0e14,transparent:true,opacity:0.4});
       // Calcular max fase y periodo para filtros
       const maxFase=Math.max(...real.map(b=>b.fase||1));
       // Filtro pit selecto
