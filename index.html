@@ -173,10 +173,6 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,loadingBlocks,fas
         m.position.set((b.X-minX-(rangeX/2))*scale,(b.Z-minZ-(rangeZ/2))*scale,(b.Y-minY-(rangeY/2))*scale);
         m.userData={...b,ley,ix:Math.round((b.X-minX)/rangeX*NX),iy:Math.round((b.Y-minY)/rangeY*NY),iz:Math.round((b.Z-minZ)/rangeZ*NZ)};
         pivot.add(m);meshes.push(m);
-        const edges=new THREE.EdgesGeometry(bGeo);
-        const line=new THREE.LineSegments(edges,edgeMat);
-        line.position.copy(m.position);
-        pivot.add(line);
       });
     } else {
       // ── BLOQUES DEMO ────────────────────────────────────────
