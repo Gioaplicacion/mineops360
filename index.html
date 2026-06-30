@@ -83,9 +83,11 @@ function stageFilterReal(b, stage, totalFases){
 }
 
 // ── Viewer3D ────────────────────────────────────────────────────
-function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,loadingBlocks}){
+function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,loadingBlocks,fasesActivas}){
   const cvRef=useRef(),threeRef=useRef({});
   const [stage,setStage]=useState(0),[zSlice,setZSlice]=useState(0),[zMax,setZMax]=useState(100),[hovered,setHovered]=useState(null);
+  const [fasesActivasState,setFasesActivasState]=useState(null);
+  useEffect(()=>{window.__setFasesActivas=setFasesActivasState;return()=>{delete window.__setFasesActivas;};},[]);
   const zSliceRef=useRef(0);
   const zMaxRef=useRef(100);
   const stageRef=useRef(0);
@@ -94,6 +96,8 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,loadingBlocks}){
   const pitSelectoRef=useRef(null);
   const totalPitsRef=useRef(20);
   const realBlocksRef=useRef(null);
+  const fasesActivasRef=useRef(null);
+  useEffect(()=>{fasesActivasRef.current=fasesActivas;rebuild();},[fasesActivas]);
   useEffect(()=>{pitSelectoRef.current=pitSelecto;totalPitsRef.current=totalPits||20;rebuild();},[pitSelecto,totalPits]);
   useEffect(()=>{realBlocksRef.current=realBlocks||null;if(realBlocks)rebuild();},[realBlocks]);
   useEffect(()=>{zSliceRef.current=zSlice;rebuild();},[zSlice]);
@@ -127,7 +131,7 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,loadingBlocks}){
       const spacingX=gridSpacing(xs)*scale;
       const spacingY=gridSpacing(ys)*scale;
       const spacingZ=gridSpacing(zs)*scale;
-      const bGeoX=new THREE.BoxGeometry(spacingX*1.5,spacingZ*1.5,spacingY*1.5);
+      const bGeoX=new THREE.BoxGeometry(spacingX*2.3,spacingZ*2.3,spacingY*2.3);
       const bGeo=bGeoX;
       const edgeMat=new THREE.LineBasicMaterial({color:0x0a0e14,transparent:true,opacity:0.4});
       // Calcular max fase y periodo para filtros
@@ -141,10 +145,15 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,loadingBlocks}){
         if(zp<zSliceRef.current||zp>zMaxRef.current)return;
         // Filtro por stage
         if(!stageFilterReal(b,currentStage,maxFase))return;
-        // Filtro por pit selecto (usa fase como proxy del pit)
+        // Filtro por fases activas (toggle individual)
+        const fa=fasesActivasRef.current;
+        if(fa&&fa.size>0&&!fa.has(b.fase||1))return;
+        // Filtro por pit selecto (usa fase + período como proxy del pit, más granular)
         if(ps){
-          const faseLimite=Math.max(1,Math.ceil((ps/nPits)*maxFaseGlobal));
-          if((b.fase||1)>faseLimite)return;
+          const maxPer=Math.max(...real.map(x=>x.per||1),1);
+          const rf=ps/nPits;
+          const perLimite=Math.max(1,Math.ceil(rf*maxPer));
+          if((b.per||1)>perLimite)return;
         }
         const ley=b.Cu||b.cu||b.ley||0;
         let r,g,bv;
@@ -219,12 +228,36 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,loadingBlocks}){
   const metal=metalConfig?.metal||METALS[0];
   return (
     <div style={{display:"flex",flexDirection:"column",gap:8}}>
-      <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+      <div style={{display:"flex",gap:4,flexWrap:"wrap",alignItems:"center"}}>
         {STAGES.map((s,i)=>(
           <button key={i} onClick={()=>{stageRef.current=i;setStage(i);rebuild();}} style={{padding:"4px 12px",borderRadius:20,border:"1px solid var(--brd)",fontSize:11,background:stage===i?"var(--acc)":"var(--card)",color:stage===i?"#fff":"var(--txt2)",cursor:"pointer",fontWeight:500}}>
             {s.label}
           </button>
         ))}
+        {stage===2&&realBlocksRef.current&&(()=>{
+          const maxF=Math.max(...realBlocksRef.current.map(b=>b.fase||1),1);
+          const fases=Array.from({length:maxF},(_,i)=>i+1);
+          return(
+            <div style={{display:"flex",gap:4,alignItems:"center",marginLeft:8,paddingLeft:8,borderLeft:"1px solid var(--brd)"}}>
+              <span style={{fontSize:9,color:"var(--txt2)"}}>Fases:</span>
+              {fases.map(f=>{
+                const active=fasesActivasState?fasesActivasState.has(f):true;
+                const col=FASE_COLORS[(f-1)%FASE_COLORS.length];
+                return(
+                  <button key={f} onClick={()=>{
+                    const cur=fasesActivasRef.current?new Set(fasesActivasRef.current):new Set(fases);
+                    if(cur.has(f))cur.delete(f);else cur.add(f);
+                    fasesActivasRef.current=cur;
+                    if(window.__setFasesActivas)window.__setFasesActivas(cur);
+                    rebuild();
+                  }} style={{width:22,height:22,borderRadius:5,border:`1.5px solid ${active?col:"var(--brd)"}`,background:active?col:"transparent",color:active?"#fff":"var(--txt2)",fontSize:10,fontWeight:700,cursor:"pointer",opacity:active?1:0.4}}>
+                    {f}
+                  </button>
+                );
+              })}
+            </div>
+          );
+        })()}
       </div>
       <div style={{position:"relative",borderRadius:10,overflow:"hidden",border:"1px solid var(--brd)"}}>
         <canvas ref={cvRef} style={{width:"100%",height:320,display:"block",cursor:"grab"}}/>
