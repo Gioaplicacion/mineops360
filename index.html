@@ -137,8 +137,7 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,loadingBlocks,fas
       const spacingX=gridSpacing(xs)*scale;
       const spacingY=gridSpacing(ys)*scale;
       const spacingZ=gridSpacing(zs)*scale;
-      console.log("DEBUG spacing:",{rawSpacingX:gridSpacing(xs),rawSpacingY:gridSpacing(ys),rawSpacingZ:gridSpacing(zs),scale,spacingX,spacingY,spacingZ,rangeX,rangeY,rangeZ,sampleX:xs.slice(0,5),numBlocks:real.length});
-      const bGeoX=new THREE.BoxGeometry(spacingX*1.0,spacingZ*1.0,spacingY*1.0);
+      const bGeoX=new THREE.BoxGeometry(spacingX*1.6,spacingZ*1.6,spacingY*1.6);
       const bGeo=bGeoX;
       const edgeMat=new THREE.LineBasicMaterial({color:0x0a0e14,transparent:true,opacity:0.25});
       // Calcular max fase y periodo para filtros
@@ -174,6 +173,10 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,loadingBlocks,fas
         m.position.set((b.X-minX-(rangeX/2))*scale,(b.Z-minZ-(rangeZ/2))*scale,(b.Y-minY-(rangeY/2))*scale);
         m.userData={...b,ley,ix:Math.round((b.X-minX)/rangeX*NX),iy:Math.round((b.Y-minY)/rangeY*NY),iz:Math.round((b.Z-minZ)/rangeZ*NZ)};
         pivot.add(m);meshes.push(m);
+        const edges=new THREE.EdgesGeometry(bGeo);
+        const line=new THREE.LineSegments(edges,edgeMat);
+        line.position.copy(m.position);
+        pivot.add(line);
       });
     } else {
       // ── BLOQUES DEMO ────────────────────────────────────────
