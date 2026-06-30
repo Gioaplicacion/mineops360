@@ -131,9 +131,9 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,loadingBlocks,fas
       const spacingX=gridSpacing(xs)*scale;
       const spacingY=gridSpacing(ys)*scale;
       const spacingZ=gridSpacing(zs)*scale;
-      const bGeoX=new THREE.BoxGeometry(spacingX*2.3,spacingZ*2.3,spacingY*2.3);
+      const bGeoX=new THREE.BoxGeometry(spacingX*1.0,spacingZ*1.0,spacingY*1.0);
       const bGeo=bGeoX;
-      const edgeMat=new THREE.LineBasicMaterial({color:0x0a0e14,transparent:true,opacity:0.4});
+      const edgeMat=new THREE.LineBasicMaterial({color:0x0a0e14,transparent:true,opacity:0.25});
       // Calcular max fase y periodo para filtros
       const maxFase=Math.max(...real.map(b=>b.fase||1));
       // Filtro pit selecto
