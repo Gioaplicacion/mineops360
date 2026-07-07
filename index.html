@@ -72,13 +72,7 @@ function stageFilterReal(b, stage, totalFases, bancoActivo){
     return (b.Cu||b.cu||b.ley||0) > 0;
   }
   if(stage===2){
-    // ¿Cómo? Fases: mostrar bloques YA EXCAVADOS (banco <= bancoActivo = frente actual)
-    // Al deslizar el slider, el frente baja y se ven más bancos excavados
-    if(bancoActivo!==undefined){
-      const bBanco=Math.round((b.Z||0)/15);
-      return bBanco>=bancoActivo; // banco >= bancoActivo: bloques que quedan (no excavados aún)
-    }
-    return true;
+    return true; // Fases: mostrar todo, el filtro de frente se hace por bancoFaseRef
   }
   if(stage===3){
     // ¿Cuándo?: bloques con período asignado
@@ -102,6 +96,8 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,realBlocksModelo,
   const totalPitsRef=useRef(20);
   const realBlocksRef=useRef(null);
   const fasesActivasRef=useRef(null);
+  const bancoFaseRef=useRef(undefined);
+  const [bancoFase,setBancoFase]=useState(undefined);
   useEffect(()=>{fasesActivasRef.current=fasesActivas;rebuild();},[fasesActivas]);
   useEffect(()=>{
     if(realBlocksModelo)threeRef.current.realBlocksModelo=realBlocksModelo;
@@ -221,16 +217,12 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,realBlocksModelo,
           const zp=((b.Z-minZ)/rangeZ)*100;
           if(zp<zSliceRef.current||zp>zMaxRef.current)return;
           // Para ¿Cómo? Fases: calcular bancoActivo desde slider Z
-          let bancoActivo=undefined;
-          if(currentStage===2){
-            const minBanco=Math.min(...real.map(x=>Math.round((x.Z||0)/15)));
-            const maxBanco=Math.max(...real.map(x=>Math.round((x.Z||0)/15)));
-            // zSlice 0% = solo banco más alto (inicio), 100% = todos los bancos (fondo)
-            const pct=zSliceRef.current/100;
-            // bancoActivo = banco más bajo que se ha excavado
-            bancoActivo=Math.round(maxBanco-(pct*(maxBanco-minBanco)));
+          if(!stageFilterReal(b,currentStage,maxFase))return;
+          // Para Fases: filtro por banco usando slider dedicado
+          if(currentStage===2&&bancoFaseRef.current!==undefined){
+            const bBanco=Math.round((b.Z||0)/15);
+            if(bBanco<bancoFaseRef.current)return;
           }
-          if(!stageFilterReal(b,currentStage,maxFase,bancoActivo))return;
           const fa=fasesActivasRef.current;
           if(fa&&fa.size>0&&!fa.has(b.fase||1))return;
           if(ps){
@@ -348,13 +340,14 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,realBlocksModelo,
               setStage(i);
               // Para Fases: iniciar con frente en 100% (todos visibles)
               if(i===2){
-                zSliceRef.current=100;
-                setZSlice(100);
+                // Inicializar frente de minado al banco más bajo (mostrar todo)
+                bancoFaseRef.current=undefined;
+                setBancoFase(undefined);
               } else {
                 zSliceRef.current=0;
                 setZSlice(0);
               }
-              setTimeout(()=>rebuild(),0);
+              setTimeout(()=>rebuild(),50);
             }} style={{padding:"4px 12px",borderRadius:20,border:"1px solid var(--brd)",fontSize:11,background:stage===i?"var(--acc)":"var(--card)",color:stage===i?"#fff":"var(--txt2)",cursor:"pointer",fontWeight:500}}>
             {s.label}
           </button>
@@ -402,9 +395,36 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,realBlocksModelo,
           Arrastra · Scroll=zoom · Clic=info
         </div>
       </div>
+      {stage===2&&real&&(()=>{
+        const bancos=real.map(b=>Math.round((b.Z||0)/15));
+        const minB=Math.min(...bancos),maxB=Math.max(...bancos);
+        const pct=bancoFase===undefined?100:Math.round(((maxB-bancoFase)/(maxB-minB))*100);
+        return(
+          <div style={{background:"rgba(0,212,255,.05)",borderRadius:8,padding:"8px 10px",marginTop:4,border:"1px solid rgba(0,212,255,.15)"}}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+              <span style={{fontSize:9,color:"var(--acc)",fontWeight:600,textTransform:"uppercase"}}>⛏ Frente de minado</span>
+              <span style={{fontSize:9,color:"var(--acc)",fontFamily:"monospace"}}>{pct}%</span>
+            </div>
+            <input type="range" min={0} max={100} value={pct}
+              onChange={e=>{
+                const p=+e.target.value/100;
+                // Derecha = más avance (más bancos visibles desde arriba hacia abajo)
+                const newBanco=Math.round(maxB-(p*(maxB-minB)));
+                bancoFaseRef.current=p>=1?undefined:newBanco;
+                setBancoFase(bancoFaseRef.current);
+                rebuild();
+              }}
+              style={{width:"100%",accentColor:"var(--acc)"}}/>
+            <div style={{display:"flex",justifyContent:"space-between",marginTop:2}}>
+              <span style={{fontSize:8,color:"var(--txt2)"}}>Banco {maxB} (inicio)</span>
+              <span style={{fontSize:8,color:"var(--txt2)"}}>Banco {minB} (fondo)</span>
+            </div>
+          </div>
+        );
+      })()}
       <div style={{background:"rgba(255,255,255,.03)",borderRadius:8,padding:"8px 10px",marginTop:4}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-          <span style={{fontSize:9,color:"var(--txt2)",fontWeight:600,textTransform:"uppercase",letterSpacing:".05em"}}>Cortes de Sección</span>
+          <span style={{fontSize:9,color:"var(--txt2)",fontWeight:600,textTransform:"uppercase",letterSpacing:".05em"}}>{stage===2?"Corte Z":"Cortes de Sección"}</span>
           <button onClick={()=>{setZSlice(0);setZMax(100);if(threeRef.current.rot){threeRef.current.rot={x:.42,y:.58};threeRef.current.zoom=1;}}} style={{fontSize:9,background:"none",border:"1px solid var(--brd)",color:"var(--txt2)",borderRadius:4,padding:"1px 7px",cursor:"pointer"}}>↺</button>
         </div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"6px 10px"}}>
