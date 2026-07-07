@@ -98,13 +98,21 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,realBlocksModelo,
   const fasesActivasRef=useRef(null);
   const bancoFaseRef=useRef(undefined);
   const [bancoFase,setBancoFase]=useState(undefined);
+  const [bancoRango,setBancoRango]=useState({min:-23,max:13});
   useEffect(()=>{fasesActivasRef.current=fasesActivas;rebuild();},[fasesActivas]);
   useEffect(()=>{
     if(realBlocksModelo)threeRef.current.realBlocksModelo=realBlocksModelo;
     if(realBlocksModelo&&stageRef.current===0)rebuild();
   },[realBlocksModelo]);
   useEffect(()=>{pitSelectoRef.current=pitSelecto;totalPitsRef.current=totalPits||20;rebuild();},[pitSelecto,totalPits]);
-  useEffect(()=>{realBlocksRef.current=realBlocks||null;if(realBlocks)rebuild();},[realBlocks]);
+  useEffect(()=>{
+    realBlocksRef.current=realBlocks||null;
+    if(realBlocks&&realBlocks.length>0){
+      const bancos=realBlocks.map(b=>Math.round((b.Z||0)/15));
+      setBancoRango({min:Math.min(...bancos),max:Math.max(...bancos)});
+      rebuild();
+    }
+  },[realBlocks]);
   useEffect(()=>{zSliceRef.current=zSlice;rebuild();},[zSlice]);
   useEffect(()=>{zMaxRef.current=zMax;rebuild();},[zMax]);
   useEffect(()=>{stageRef.current=stage;rebuild();},[stage]);
@@ -395,9 +403,8 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,realBlocksModelo,
           Arrastra · Scroll=zoom · Clic=info
         </div>
       </div>
-      {stage===2&&real&&(()=>{
-        const bancos=real.map(b=>Math.round((b.Z||0)/15));
-        const minB=Math.min(...bancos),maxB=Math.max(...bancos);
+      {stage===2&&(()=>{
+        const minB=bancoRango.min,maxB=bancoRango.max;
         const pct=bancoFase===undefined?100:Math.round(((maxB-bancoFase)/(maxB-minB))*100);
         return(
           <div style={{background:"rgba(0,212,255,.05)",borderRadius:8,padding:"8px 10px",marginTop:4,border:"1px solid rgba(0,212,255,.15)"}}>
