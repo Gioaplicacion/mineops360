@@ -343,7 +343,21 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,realBlocksModelo,
     <div style={{display:"flex",flexDirection:"column",gap:8}}>
       <div style={{display:"flex",gap:4,flexWrap:"wrap",alignItems:"center"}}>
         {STAGES.map((s,i)=>(
-          <button key={i} onClick={()=>{stageRef.current=i;setStage(i);rebuild();}} style={{padding:"4px 12px",borderRadius:20,border:"1px solid var(--brd)",fontSize:11,background:stage===i?"var(--acc)":"var(--card)",color:stage===i?"#fff":"var(--txt2)",cursor:"pointer",fontWeight:500}}>
+          <button key={i} onClick={()=>{
+              stageRef.current=i;
+              setStage(i);
+              // Para Fases: iniciar con frente en 100% (todos visibles)
+              if(i===2&&zSliceRef.current===0){
+                zSliceRef.current=100;
+                setZSlice(100);
+              }
+              // Para otros módulos: restaurar slider a 0%
+              if(i!==2){
+                zSliceRef.current=0;
+                setZSlice(0);
+              }
+              rebuild();
+            }} style={{padding:"4px 12px",borderRadius:20,border:"1px solid var(--brd)",fontSize:11,background:stage===i?"var(--acc)":"var(--card)",color:stage===i?"#fff":"var(--txt2)",cursor:"pointer",fontWeight:500}}>
             {s.label}
           </button>
         ))}
