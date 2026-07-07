@@ -347,12 +347,11 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,realBlocksModelo,
               stageRef.current=i;
               setStage(i);
               // Para Fases: iniciar con frente en 100% (todos visibles)
-              if(i===2&&zSliceRef.current===0){
+              if(i===2){
                 zSliceRef.current=100;
                 setZSlice(100);
-              }
-              // Para otros módulos: restaurar slider a 0%
-              if(i!==2){
+              } else {
+                // Para otros módulos: restaurar slider a 0%
                 zSliceRef.current=0;
                 setZSlice(0);
               }
