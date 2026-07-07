@@ -178,8 +178,7 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,loadingBlocks,fas
           }
         });
         const total=cellList.length;
-        const inst=new THREE.InstancedMesh(bGeo,new THREE.MeshLambertMaterial({vertexColors:true}),total);
-        inst.instanceColor=new THREE.InstancedBufferAttribute(new Float32Array(total*3),3);
+        const inst=new THREE.InstancedMesh(bGeo,new THREE.MeshLambertMaterial(),total);
         const dummy=new THREE.Object3D();
         let idx=0;
         cellList.forEach(({kx,ky,kz})=>{
@@ -209,6 +208,7 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,loadingBlocks,fas
       } else {
         // ── OTROS MÓDULOS: solo bloques reales con filtros (¿Cuánto?, Fases, ¿Cuándo?) ──
         real.forEach(b=>{
+          if(b.info===0)return; // No mostrar relleno en módulos filtrados
           const zp=((b.Z-minZ)/rangeZ)*100;
           if(zp<zSliceRef.current||zp>zMaxRef.current)return;
           // Para ¿Cómo? Fases: calcular bancoActivo desde slider Z
@@ -836,27 +836,8 @@ function App(){
       try{parseAndSetBlocks(csvCompletoTexto,true);}finally{setLoadingBlocks(false);}
     }
     const form=new FormData();
-    // Si el CSV tiene columna info, filtrar solo info=1 para el backend
-    let csvParaBackend=csv;
-    if(csv.name&&csv.name.includes("completo")||csvCompletoTexto){
-      // Leer CSV, filtrar info=1, crear nuevo Blob
-      try{
-        const text=await csv.text();
-        const lines=text.trim().split("\n");
-        const headers=lines[0].split(",").map(h=>h.trim().toLowerCase());
-        if(headers.includes("info")){
-          const filtradas=lines.slice(1).filter(l=>{
-            const vals=l.split(",");
-            const infoIdx=headers.indexOf("info");
-            return vals[infoIdx]&&vals[infoIdx].trim()==="1";
-          });
-          const csvFiltrado=[lines[0],...filtradas].join("\n");
-          csvParaBackend=new Blob([csvFiltrado],{type:"text/csv"});
-          console.log("CSV filtrado para backend: info=1, bloques:",filtradas.length);
-        }
-      }catch(e){console.warn("No se pudo filtrar CSV:",e);}
-    }
-    form.append("modelo_csv",csvParaBackend);
+    // Siempre usar el CSV original para el backend (el usuario sube el de pipeline aparte)
+    form.append("modelo_csv",csv);
     form.append("params_json",JSON.stringify(params));
     try{
       const res=await fetch(`${API}/api/run`,{method:"POST",body:form});
