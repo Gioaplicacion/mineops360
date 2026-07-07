@@ -72,13 +72,13 @@ function stageFilterReal(b, stage, totalFases, bancoActivo){
     return (b.Cu||b.cu||b.ley||0) > 0;
   }
   if(stage===2){
-    // ¿Cómo? Fases: mostrar bloques por encima del frente de minado (banco >= bancoActivo)
-    // bancoActivo = banco más bajo que ya se ha excavado
+    // ¿Cómo? Fases: mostrar bloques YA EXCAVADOS (banco <= bancoActivo = frente actual)
+    // Al deslizar el slider, el frente baja y se ven más bancos excavados
     if(bancoActivo!==undefined){
       const bBanco=Math.round((b.Z||0)/15);
-      return bBanco>=bancoActivo;
+      return bBanco>=bancoActivo; // banco >= bancoActivo: bloques que quedan (no excavados aún)
     }
-    return b.fase <= (totalFases||4);
+    return true;
   }
   if(stage===3){
     // ¿Cuándo?: bloques con período asignado
@@ -88,7 +88,7 @@ function stageFilterReal(b, stage, totalFases, bancoActivo){
 }
 
 // ── Viewer3D ────────────────────────────────────────────────────
-function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,loadingBlocks,fasesActivas}){
+function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,realBlocksModelo,loadingBlocks,fasesActivas}){
   const cvRef=useRef(),threeRef=useRef({});
   const [stage,setStage]=useState(0),[zSlice,setZSlice]=useState(0),[zMax,setZMax]=useState(100),[hovered,setHovered]=useState(null);
   const [fasesActivasState,setFasesActivasState]=useState(null);
@@ -103,6 +103,10 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,loadingBlocks,fas
   const realBlocksRef=useRef(null);
   const fasesActivasRef=useRef(null);
   useEffect(()=>{fasesActivasRef.current=fasesActivas;rebuild();},[fasesActivas]);
+  useEffect(()=>{
+    if(realBlocksModelo)threeRef.current.realBlocksModelo=realBlocksModelo;
+    if(realBlocksModelo&&stageRef.current===0)rebuild();
+  },[realBlocksModelo]);
   useEffect(()=>{pitSelectoRef.current=pitSelecto;totalPitsRef.current=totalPits||20;rebuild();},[pitSelecto,totalPits]);
   useEffect(()=>{realBlocksRef.current=realBlocks||null;if(realBlocks)rebuild();},[realBlocks]);
   useEffect(()=>{zSliceRef.current=zSlice;rebuild();},[zSlice]);
@@ -115,7 +119,10 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,loadingBlocks,fas
     const meshes=[],cfg=cfgRef.current;
     const rangos=cfg?.rangos||[],oor=cfg?.oorColor||"#b8c2d4";
     const real=realBlocksRef.current;
+    const realModelo=threeRef.current.realBlocksModelo||null;
     const currentStage=stageRef.current;
+    // Para módulo Modelo, usar CSV completo si está disponible
+    const realParaModelo=currentStage===0&&realModelo?realModelo:real;
 
     if(real&&real.length>0){
       // ── BLOQUES REALES ──────────────────────────────────────
@@ -150,9 +157,11 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,loadingBlocks,fas
       const ps=pitSelectoRef.current;
       const nPits=totalPitsRef.current||20;
 
+      // Para módulo Modelo usar CSV completo si disponible
+      const srcModelo=realParaModelo||real;
       // Construir set de coordenadas reales para lookup rápido + mapa de bloques reales por key
       const realMap=new Map();
-      real.forEach(b=>{
+      srcModelo.forEach(b=>{
         const kx=Math.round(b.X/rawSpX),ky=Math.round(b.Y/rawSpY),kz=Math.round(b.Z/rawSpZ);
         realMap.set(`${kx},${ky},${kz}`,b);
       });
@@ -216,8 +225,9 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,loadingBlocks,fas
           if(currentStage===2){
             const minBanco=Math.min(...real.map(x=>Math.round((x.Z||0)/15)));
             const maxBanco=Math.max(...real.map(x=>Math.round((x.Z||0)/15)));
-            // zSlice 0% = banco más alto visible (todo), 100% = hemos bajado hasta el fondo
+            // zSlice 0% = solo banco más alto (inicio), 100% = todos los bancos (fondo)
             const pct=zSliceRef.current/100;
+            // bancoActivo = banco más bajo que se ha excavado
             bancoActivo=Math.round(maxBanco-(pct*(maxBanco-minBanco)));
           }
           if(!stageFilterReal(b,currentStage,maxFase,bancoActivo))return;
@@ -731,6 +741,7 @@ function App(){
   const [pitData,setPitData]=useState(null);
   const [pitSelecto,setPitSelecto]=useState(null);
   const [realBlocks,setRealBlocks]=useState(null);
+  const [realBlocksModelo,setRealBlocksModelo]=useState(null); // CSV completo para módulo Modelo
   const [loadingBlocks,setLoadingBlocks]=useState(false);
   const [csvCompletoTexto,setCsvCompletoTexto]=useState(null);
   const [metalConfig,setMetalConfig]=useState(null);
@@ -824,7 +835,11 @@ function App(){
         :allBlocks;
       console.log("Bloques cargados:",sample.length,"de",allBlocks.length);
     }
-    setRealBlocks(sample);
+    if(esCompleto){
+      setRealBlocksModelo(sample); // CSV completo -> solo para módulo Modelo
+    } else {
+      setRealBlocks(sample); // CSV pipeline -> para módulos ¿Cuánto?, Fases, ¿Cuándo?
+    }
   }
 
 
@@ -869,7 +884,7 @@ function App(){
           </div>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:8}}>
-          {(status==="done"||result)&&<button onClick={()=>{setStatus("idle");setResult(null);setJobId(null);setError(null);setPitData(null);setPitSelecto(null);setRealBlocks(null);setTab("proyecto")}} style={{background:"none",border:"1px solid var(--brd)",color:"var(--txt2)",borderRadius:8,padding:"7px 14px",fontSize:12,cursor:"pointer"}}>← Nuevo</button>}
+          {(status==="done"||result)&&<button onClick={()=>{setStatus("idle");setResult(null);setJobId(null);setError(null);setPitData(null);setPitSelecto(null);setRealBlocks(null);setRealBlocksModelo(null);setCsvCompletoTexto(null);setTab("proyecto")}} style={{background:"none",border:"1px solid var(--brd)",color:"var(--txt2)",borderRadius:8,padding:"7px 14px",fontSize:12,cursor:"pointer"}}>← Nuevo</button>}
           <span style={{fontSize:10,color:"var(--txt2)",fontFamily:"monospace"}}>v1.0.0</span>
         </div>
       </div>
@@ -915,7 +930,7 @@ function App(){
                 <button onClick={()=>setTab("metal")} style={{background:"none",border:"1px solid var(--brd)",color:"var(--txt2)",borderRadius:8,padding:"7px 14px",fontSize:11,cursor:"pointer"}}>⚙ Rangos</button>
               </div>
             </div>
-            <Viewer3D metalConfig={metalConfig} pitSelecto={pitSelecto} totalPits={pitData?pitData.length:20} realBlocks={realBlocks} loadingBlocks={loadingBlocks}/>
+            <Viewer3D metalConfig={metalConfig} pitSelecto={pitSelecto} totalPits={pitData?pitData.length:20} realBlocks={realBlocks} realBlocksModelo={realBlocksModelo} loadingBlocks={loadingBlocks}/>
           </div>
         </div>
       </div>
