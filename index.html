@@ -351,11 +351,10 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,realBlocksModelo,
                 zSliceRef.current=100;
                 setZSlice(100);
               } else {
-                // Para otros módulos: restaurar slider a 0%
                 zSliceRef.current=0;
                 setZSlice(0);
               }
-              rebuild();
+              setTimeout(()=>rebuild(),0);
             }} style={{padding:"4px 12px",borderRadius:20,border:"1px solid var(--brd)",fontSize:11,background:stage===i?"var(--acc)":"var(--card)",color:stage===i?"#fff":"var(--txt2)",cursor:"pointer",fontWeight:500}}>
             {s.label}
           </button>
@@ -414,7 +413,7 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,realBlocksModelo,
               <span style={{fontSize:9,color:"var(--txt2)"}}>{stage===2?"⛏ Frente de minado":"↑ Z inferior"}</span>
               <span style={{fontSize:9,color:"var(--acc)",fontFamily:"monospace"}}>{zSlice}%</span>
             </div>
-            <input type="range" min={0} max={90} value={zSlice} onChange={e=>{zSliceRef.current=+e.target.value;setZSlice(+e.target.value);rebuild();}} style={{width:"100%",accentColor:"var(--acc)"}}/>
+            <input type="range" min={0} max={stage===2?100:90} value={zSlice} onChange={e=>{zSliceRef.current=+e.target.value;setZSlice(+e.target.value);rebuild();}} style={{width:"100%",accentColor:"var(--acc)"}}/>
           </div>
           <div>
             <div style={{display:"flex",justifyContent:"space-between",marginBottom:2}}>
