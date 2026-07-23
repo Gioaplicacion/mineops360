@@ -685,7 +685,7 @@ function PitByPitChart({pits,onSelect,selecto}){
   const optimo=pits.reduce((m,p)=>(p.vanSpec||0)>(m.vanSpec||0)?p:m,pits[0]);
 
   // Dimensiones SVG
-  const W=700,H=220,PAD_L=52,PAD_R=52,PAD_T=16,PAD_B=28;
+  const W=700,H=160,PAD_L=52,PAD_R=52,PAD_T=12,PAD_B=24;
   const chartW=W-PAD_L-PAD_R;
   const chartH=H-PAD_T-PAD_B;
   const barW=chartW/pits.length;
@@ -728,7 +728,7 @@ function PitByPitChart({pits,onSelect,selecto}){
         {tonTicks.map((t,i)=>(
           <g key={i}>
             <line x1={PAD_L} y1={tonY(t)} x2={W-PAD_R} y2={tonY(t)} stroke="#1f2937" strokeWidth={i===0?1:0.4} strokeDasharray={i===0?"none":"4,3"}/>
-            <text x={PAD_L-4} y={tonY(t)+4} textAnchor="end" fontSize="8" fill="#6b8099">{(t/1e6).toFixed(1)}</text>
+            <text x={PAD_L-4} y={tonY(t)+4} textAnchor="end" fontSize="8" fill="#6b8099">{t.toFixed(1)}</text>
           </g>
         ))}
 
@@ -759,7 +759,7 @@ function PitByPitChart({pits,onSelect,selecto}){
         <line x1={W-PAD_R} y1={PAD_T} x2={W-PAD_R} y2={PAD_T+chartH} stroke="#374151" strokeWidth="0.5"/>
         {vanTicks.map((v,i)=>(
           <g key={i}>
-            <text x={W-PAD_R+4} y={vanY(v)+4} textAnchor="start" fontSize="8" fill="#6b8099">{(v/1e6).toFixed(0)}M</text>
+            <text x={W-PAD_R+4} y={vanY(v)+4} textAnchor="start" fontSize="8" fill="#6b8099">{v.toFixed(0)}M</text>
           </g>
         ))}
         <text x={W-12} y={PAD_T+chartH/2} textAnchor="middle" fontSize="8" fill="#6b8099" transform={`rotate(90,${W-12},${PAD_T+chartH/2})`}>VAN (MUSD)</text>
