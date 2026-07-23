@@ -553,7 +553,7 @@ function UploadForm({onSubmit,loading,onCsvCompleto}){
       <div>
         <div style={{fontSize:10,color:"var(--txt2)",textTransform:"uppercase",letterSpacing:".05em",fontWeight:600,marginBottom:6}}>Modelo de bloques <span style={{color:"var(--danger)"}}>*</span></div>
         <div onClick={()=>ref.current.click()} style={{border:`2px dashed ${csv?"var(--ore)":"var(--brd)"}`,borderRadius:12,padding:24,textAlign:"center",cursor:"pointer",background:csv?"rgba(29,158,117,.05)":"var(--sur)"}}>
-          <input ref={ref} type="file" accept=".csv,.txt" style={{display:"none"}} onChange={e=>{
+          <input ref={ref} type="file" accept=".csv,.txt,.asc" style={{display:"none"}} onChange={e=>{
             const f=e.target.files[0];
             if(!f)return;
             setCsv(f);
@@ -569,7 +569,7 @@ function UploadForm({onSubmit,loading,onCsvCompleto}){
             reader.readAsText(f);
           }}/>
           {csv?<div><div style={{color:"var(--ore)",fontWeight:600,fontSize:13}}>{csv.name}</div><div style={{color:"var(--txt2)",fontSize:11,marginTop:4}}>{(csv.size/1024).toFixed(1)} KB · Click para cambiar</div></div>
-          :<div><div style={{color:"var(--txt2)",fontSize:13}}>Arrastra tu CSV o haz click</div><div style={{color:"var(--txt2)",fontSize:11,marginTop:4,opacity:.6}}>CSV simple (X,Y,Z,Cu) o modelo completo (con columna info)</div></div>}
+          :<div><div style={{color:"var(--txt2)",fontSize:13}}>Arrastra tu CSV o haz click</div><div style={{color:"var(--txt2)",fontSize:11,marginTop:4,opacity:.6}}>CSV o ASC · Columnas: X/EAST, Y/NORTH, Z/ELEV, Cu/AU</div></div>}
         </div>
       </div>
 
@@ -936,20 +936,31 @@ function App(){
   function parseAndSetBlocks(text,esCompleto=false){
     const lines=text.trim().split("\n");
     if(lines.length<2)return;
-    const headers=lines[0].split(",").map(h=>h.trim().toLowerCase());
+    // Detectar separador: coma (CSV) o espacio/tab (ASC)
+    const firstLine=lines[0];
+    const sep=firstLine.includes(",")? "," : /\s+/;
+    const splitLine=(l)=>sep===","?l.split(","):l.trim().split(/\s+/);
+    const headers=splitLine(lines[0]).map(h=>h.trim().toLowerCase());
     const hasInfo=headers.includes("info");
     const allBlocks=lines.slice(1).map(line=>{
-      const vals=line.split(",");
+      const vals=splitLine(line);
       const obj={};
       headers.forEach((h,i)=>{obj[h]=isNaN(vals[i])?vals[i]:parseFloat(vals[i]);});
       return obj;
     }).filter(b=>!isNaN(b.x)&&!isNaN(b.y)&&!isNaN(b.z));
     allBlocks.forEach(b=>{
-      b.Cu=b.cu??b.ley??b.Cu??b.grade??0;
-      b.X=b.x??b.X??0;
-      b.Y=b.y??b.Y??0;
-      b.Z=b.z??b.Z??0;
-      b.fase=b.fase??b.phase??1;
+      // Mapeo de columnas alternativas (.asc y otros formatos mineros)
+      // Coordenadas
+      b.X=b.x??b.X??b.east??b.este??0;
+      b.Y=b.y??b.Y??b.north??b.norte??0;
+      b.Z=b.z??b.Z??b.elev??b.elevation??b.z_coord??0;
+      // Ley del metal (Cu, Au, etc.)
+      b.Cu=b.cu??b.ley??b.Cu??b.au??b.grade??b.au_gt??b.cu_pct??0;
+      // Tonelaje y densidad
+      b.tonelaje=b.tonelaje??b.tones??b.ton??b.tonnes??0;
+      b.dens=b.dens??b.sg??b.density??2.5;
+      // Fase y período
+      b.fase=b.fase??b.phase??b.class??1;
       b.per=b.periodo??b.period??b.per??1;
       b.info=b.info!==undefined?b.info:1;
     });
