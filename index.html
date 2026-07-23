@@ -410,14 +410,15 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,realBlocksModelo,
           <div style={{background:"rgba(0,212,255,.05)",borderRadius:8,padding:"8px 10px",marginTop:4,border:"1px solid rgba(0,212,255,.15)"}}>
             <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
               <span style={{fontSize:9,color:"var(--acc)",fontWeight:600,textTransform:"uppercase"}}>⛏ Frente de minado</span>
-              <span style={{fontSize:9,color:"var(--acc)",fontFamily:"monospace"}}>{pct}%</span>
+              <span style={{fontSize:9,color:"var(--acc)",fontFamily:"monospace"}}>
+                {bancoFase===undefined?"Todo":`Banco ${bancoFase}`}
+              </span>
             </div>
-            <input type="range" min={0} max={100} value={pct}
+            <input type="range" min={0} max={maxB-minB} step={1} value={bancoFase===undefined?maxB-minB:maxB-bancoFase}
               onChange={e=>{
-                const p=+e.target.value/100;
-                // Derecha = más avance (más bancos visibles desde arriba hacia abajo)
-                const newBanco=Math.round(maxB-(p*(maxB-minB)));
-                bancoFaseRef.current=p>=1?undefined:newBanco;
+                const steps=+e.target.value;
+                const newBanco=maxB-steps;
+                bancoFaseRef.current=steps>=(maxB-minB)?undefined:newBanco;
                 setBancoFase(bancoFaseRef.current);
                 rebuild();
               }}
