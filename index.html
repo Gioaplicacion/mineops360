@@ -847,23 +847,70 @@ function App(){
           if(data&&data.van_total_MUSD!==undefined){
             setResult(data);setStatus("done");setTab("resultados");loadRealBlocks(jid);
             const van=data.van_total_MUSD||30;
-            const n=20;
-            const optIdx=Math.round(n*0.62); // pit óptimo cerca del 60-65% del RF
-            const pd=Array.from({length:n},(_,i)=>{
-              const rf=(i+1)/n;
-              // Curva ascendente hasta el óptimo, luego decrece suavemente (forma realista de NPV vs RF)
-              let v;
-              if(i<=optIdx){
-                v=van*(0.15+0.85*Math.pow((i+1)/(optIdx+1),0.85));
-              } else {
-                const declineProgress=(i-optIdx)/(n-optIdx);
-                v=van*(1-declineProgress*0.18);
-              }
-              return {pit:i+1,rf:Math.round(rf*100)/100,
-                tonMin:Math.round(rf*3*1.1*10)/10,
-                tonEst:Math.round(rf*1.8*10)/10,
-                vanBest:v*1.15,vanWorst:v*0.72,vanSpec:v};
-            });
+            // Usar datos reales del pipeline si están disponibles
+            const pitsData=data.resumen_pits?.pits||data.pits_data||null;
+            const planData=data.plan_minero?.plan||[];
+            const numPits=data.resumen_pits?.num_pits||20;
+
+            let pd;
+            if(pitsData&&Array.isArray(pitsData)&&pitsData.length>0){
+              // Datos reales por pit del backend
+              pd=pitsData.map((p,i)=>({
+                pit:i+1,
+                rf:p.revenue_factor||((i+1)/pitsData.length),
+                tonMin:(p.tonelaje_mineral_Mt||p.mineral_Mt||0),
+                tonEst:(p.tonelaje_esteril_Mt||p.esteril_Mt||0),
+                vanSpec:p.van_MUSD||p.npv_MUSD||p.van||0,
+                vanBest:(p.van_MUSD||0)*1.15,
+                vanWorst:(p.van_MUSD||0)*0.72,
+              }));
+            } else if(planData.length>0){
+              // Usar plan minero por período para construir curva acumulada
+              const periodos=planData.filter(p=>p&&typeof p.periodo!=="undefined");
+              const n=numPits||20;
+              const vanAcum=[];
+              let vanAc=0;
+              const tasa=0.10;
+              periodos.forEach((p,i)=>{
+                const vanPeriodo=p.VAN_net_MUSD||p.van_MUSD||p.beneficio_MUSD||(van/periodos.length);
+                vanAc+=vanPeriodo/Math.pow(1+tasa,i);
+                vanAcum.push(vanAc);
+              });
+              const maxVanAcum=Math.max(...vanAcum,van);
+              pd=Array.from({length:n},(_,i)=>{
+                const rf=(i+1)/n;
+                const optIdx=Math.round(n*0.62);
+                let v;
+                if(i<=optIdx){
+                  v=van*(0.15+0.85*Math.pow((i+1)/(optIdx+1),0.85));
+                } else {
+                  const declineProgress=(i-optIdx)/(n-optIdx);
+                  v=van*(1-declineProgress*0.18);
+                }
+                // Tonelaje real del plan si está disponible
+                const perIdx=Math.min(i,periodos.length-1);
+                const tonMin=periodos[perIdx]?(periodos[perIdx].mineral_mined_Mt||rf*3*1.1):rf*3*1.1;
+                const tonEst=periodos[perIdx]?(periodos[perIdx].waste_mined_Mt||rf*1.8):rf*1.8;
+                return {pit:i+1,rf:Math.round(rf*100)/100,
+                  tonMin:Math.round(tonMin*10)/10,
+                  tonEst:Math.round(tonEst*10)/10,
+                  vanBest:v*1.15,vanWorst:v*0.72,vanSpec:v};
+              });
+            } else {
+              // Fallback sintético
+              const n=numPits||20;
+              const optIdx=Math.round(n*0.62);
+              pd=Array.from({length:n},(_,i)=>{
+                const rf=(i+1)/n;
+                let v;
+                if(i<=optIdx){v=van*(0.15+0.85*Math.pow((i+1)/(optIdx+1),0.85));}
+                else{const dp=(i-optIdx)/(n-optIdx);v=van*(1-dp*0.18);}
+                return {pit:i+1,rf:Math.round(rf*100)/100,
+                  tonMin:Math.round(rf*3*1.1*10)/10,
+                  tonEst:Math.round(rf*1.8*10)/10,
+                  vanBest:v*1.15,vanWorst:v*0.72,vanSpec:v};
+              });
+            }
             setPitData(pd);return;
           }
         }
