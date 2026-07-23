@@ -460,7 +460,17 @@ function Viewer3D({metalConfig,pitSelecto,totalPits,realBlocks,realBlocksModelo,
 function MetalSelector({onApply}){
   const [query,setQuery]=useState(""),[sug,setSug]=useState([]),[showSug,setShowSug]=useState(false);
   const [metal,setMetal]=useState(METALS[0]),[rangos,setRangos]=useState(defaultRangos("Cu")),[oor,setOor]=useState("#b8c2d4");
-  useEffect(()=>{onApply({metal:METALS[0],rangos:defaultRangos("Cu"),oorColor:"#b8c2d4"})},[]);
+  useEffect(()=>{
+    onApply({metal:METALS[0],rangos:defaultRangos("Cu"),oorColor:"#b8c2d4"});
+    // Exponer setter para auto-selección desde el pipeline
+    window.__setMetalAuto=(cfg)=>{
+      setMetal(cfg.metal);
+      setRangos(cfg.rangos);
+      setQuery(`${cfg.metal.name} (${cfg.metal.sym})`);
+      onApply(cfg);
+    };
+    return()=>{delete window.__setMetalAuto;};
+  },[]);
   function selMetal(sym){
     const m=METALS.find(x=>x.sym===sym)||METALS[0];const r=defaultRangos(sym);
     setMetal(m);setRangos(r);setQuery(`${m.name} (${m.sym})`);setShowSug(false);
@@ -846,6 +856,13 @@ function App(){
           const data=await r.json();
           if(data&&data.van_total_MUSD!==undefined){
             setResult(data);setStatus("done");setTab("resultados");loadRealBlocks(jid);
+            // Auto-seleccionar metal si el backend lo detectó
+            if(data.metal_info&&data.metal_info.simbolo){
+              const sym=data.metal_info.simbolo;
+              const m=METALS.find(x=>x.sym===sym)||METALS[0];
+              const rangos=defaultRangos(sym);
+              if(window.__setMetalAuto)window.__setMetalAuto({metal:m,rangos,oorColor:"#b8c2d4"});
+            }
             const van=data.van_total_MUSD||30;
             // Usar datos reales del pipeline si están disponibles
             const pitsData=data.resumen_pits?.pits||data.pits_data||null;
