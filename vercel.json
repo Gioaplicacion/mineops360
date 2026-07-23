@@ -11,6 +11,6 @@
     }
   ],
   "rewrites": [
-    { "source": "/(.*)", "destination": "/inicio.html" }
+    { "source": "/(.*)", "destination": "/gmp_v52.html" }
   ]
 }
