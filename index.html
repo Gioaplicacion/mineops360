@@ -539,8 +539,6 @@ function MetalSelector({onApply}){
 // ── UploadForm ──────────────────────────────────────────────────
 function UploadForm({onSubmit,loading,onCsvCompleto}){
   const [csv,setCsv]=useState(null);
-  const [csvCompleto,setCsvCompleto]=useState(null);
-  const refCompleto=useRef();
   const [params,setParams]=useState({nombre:"Mi Proyecto",metal:"cu",bloque:{xsiz:10,ysiz:10,zsiz:15,densidad:2.5},economico:{precio_metal:4,cargo_tc_rc:.1,recuperacion:90,costo_mina:2,costo_planta:10,tasa_descuento:.1},scheduler:{cap_mineral_t:35000000,cap_movimiento_t:70000000,cap_planta_t:30000000,usar_lane:false}});
   const ref=useRef();
   const eco=params.economico;
@@ -555,30 +553,26 @@ function UploadForm({onSubmit,loading,onCsvCompleto}){
       <div>
         <div style={{fontSize:10,color:"var(--txt2)",textTransform:"uppercase",letterSpacing:".05em",fontWeight:600,marginBottom:6}}>Modelo de bloques <span style={{color:"var(--danger)"}}>*</span></div>
         <div onClick={()=>ref.current.click()} style={{border:`2px dashed ${csv?"var(--ore)":"var(--brd)"}`,borderRadius:12,padding:24,textAlign:"center",cursor:"pointer",background:csv?"rgba(29,158,117,.05)":"var(--sur)"}}>
-          <input ref={ref} type="file" accept=".csv,.txt" style={{display:"none"}} onChange={e=>setCsv(e.target.files[0])}/>
-          {csv?<div><div style={{color:"var(--ore)",fontWeight:600,fontSize:13}}>{csv.name}</div><div style={{color:"var(--txt2)",fontSize:11,marginTop:4}}>{(csv.size/1024).toFixed(1)} KB · Click para cambiar</div></div>
-          :<div><div style={{color:"var(--txt2)",fontSize:13}}>Arrastra tu CSV o haz click</div><div style={{color:"var(--txt2)",fontSize:11,marginTop:4,opacity:.6}}>Columnas: X, Y, Z, Cu</div></div>}
-        </div>
-      </div>
-      <div>
-        <div style={{fontSize:10,color:"var(--txt2)",textTransform:"uppercase",letterSpacing:".05em",fontWeight:600,marginBottom:6}}>
-          Modelo completo <span style={{fontWeight:400,opacity:.6}}>(opcional)</span>
-        </div>
-        <div onClick={()=>refCompleto.current.click()} style={{border:`2px dashed ${csvCompleto?"var(--acc)":"var(--brd)"}`,borderRadius:12,padding:14,textAlign:"center",cursor:"pointer",background:csvCompleto?"rgba(0,212,255,.05)":"var(--sur)"}}>
-          <input ref={refCompleto} type="file" accept=".csv,.txt" style={{display:"none"}} onChange={e=>{
-            const f=e.target.files[0];setCsvCompleto(f);
-            if(f&&onCsvCompleto){
-              const reader=new FileReader();
-              reader.onload=ev=>onCsvCompleto(ev.target.result);
-              reader.readAsText(f);
-            }
+          <input ref={ref} type="file" accept=".csv,.txt" style={{display:"none"}} onChange={e=>{
+            const f=e.target.files[0];
+            if(!f)return;
+            setCsv(f);
+            // Leer el CSV y detectar si tiene columna info (modelo completo)
+            const reader=new FileReader();
+            reader.onload=ev=>{
+              const text=ev.target.result;
+              const firstLine=text.split("\n")[0].toLowerCase();
+              if(firstLine.includes("info")&&onCsvCompleto){
+                onCsvCompleto(text); // Cargar visualización completa automáticamente
+              }
+            };
+            reader.readAsText(f);
           }}/>
-          {csvCompleto
-            ?<div><div style={{color:"var(--acc)",fontWeight:600,fontSize:12}}>{csvCompleto.name}</div><div style={{color:"var(--txt2)",fontSize:10,marginTop:2}}>{(csvCompleto.size/1024/1024).toFixed(1)} MB · Con relleno completo</div></div>
-            :<div><div style={{color:"var(--txt2)",fontSize:12}}>CSV con malla completa (info=0/1)</div><div style={{color:"var(--txt2)",fontSize:10,marginTop:2,opacity:.6}}>Para visualización 3D completa</div></div>
-          }
+          {csv?<div><div style={{color:"var(--ore)",fontWeight:600,fontSize:13}}>{csv.name}</div><div style={{color:"var(--txt2)",fontSize:11,marginTop:4}}>{(csv.size/1024).toFixed(1)} KB · Click para cambiar</div></div>
+          :<div><div style={{color:"var(--txt2)",fontSize:13}}>Arrastra tu CSV o haz click</div><div style={{color:"var(--txt2)",fontSize:11,marginTop:4,opacity:.6}}>CSV simple (X,Y,Z,Cu) o modelo completo (con columna info)</div></div>}
         </div>
       </div>
+
       <div style={{display:"flex",flexDirection:"column",gap:8}}>
         <div style={{fontSize:10,color:"var(--txt2)",textTransform:"uppercase",letterSpacing:".05em",fontWeight:600}}>Parámetros económicos</div>
         {[["Precio metal (USD/lb)","precio_metal",.1],["Cargo TC/RC","cargo_tc_rc",.01],["Recuperación %","recuperacion",1],["Costo mina (USD/t)","costo_mina",.5],["Costo planta (USD/t)","costo_planta",.5]].map(([l,k,s])=>(
@@ -891,8 +885,24 @@ function App(){
       try{parseAndSetBlocks(csvCompletoTexto,true);}finally{setLoadingBlocks(false);}
     }
     const form=new FormData();
-    // Siempre usar el CSV original para el backend (el usuario sube el de pipeline aparte)
-    form.append("modelo_csv",csv);
+    // Si el CSV tiene columna info, filtrar solo info=1 para el backend
+    let csvParaBackend=csv;
+    try{
+      const text=await csv.text();
+      const lines=text.trim().split("\n");
+      const headers=lines[0].split(",").map(h=>h.trim().toLowerCase());
+      if(headers.includes("info")){
+        const filtradas=lines.slice(1).filter(l=>{
+          const vals=l.split(",");
+          const infoIdx=headers.indexOf("info");
+          return vals[infoIdx]&&vals[infoIdx].trim()==="1";
+        });
+        const csvFiltrado=[lines[0],...filtradas].join("\n");
+        csvParaBackend=new Blob([csvFiltrado],{type:"text/csv"});
+        console.log("CSV filtrado para backend: info=1, bloques:",filtradas.length);
+      }
+    }catch(e){console.warn("No se pudo filtrar CSV:",e);}
+    form.append("modelo_csv",csvParaBackend);
     form.append("params_json",JSON.stringify(params));
     try{
       const res=await fetch(`${API}/api/run`,{method:"POST",body:form});
