@@ -679,20 +679,36 @@ function ResultsDashboard({result,jobId}){
 function PitByPitChart({pits,onSelect,selecto}){
   if(!pits||!pits.length) return null;
   const maxTon=Math.max(...pits.map(p=>(p.tonMin||0)+(p.tonEst||0)),1);
-  const maxVan=Math.max(...pits.map(p=>Math.abs(p.vanBest||0)),1);
+  const maxVan=Math.max(...pits.map(p=>p.vanBest||0),1);
   const minVan=Math.min(...pits.map(p=>p.vanWorst||0),0);
   const vanRange=maxVan-minVan||1;
   const optimo=pits.reduce((m,p)=>(p.vanSpec||0)>(m.vanSpec||0)?p:m,pits[0]);
-  const BAR_H=55,CURVE_H=38,PAD_L=36,PAD_R=36,PAD_T=6,PAD_B=16,W=600;
-  const gap=(W-PAD_L-PAD_R)/pits.length;
-  const vanY=(v,h)=>PAD_T+BAR_H+h-(((v||0)-minVan)/vanRange)*h;
-  const curvePts=(key,h)=>pits.map((p,i)=>`${PAD_L+i*gap+gap/2},${Math.max(PAD_T+BAR_H,Math.min(PAD_T+BAR_H+h,vanY(p[key],h)))}`).join(" ");
+
+  // Dimensiones SVG
+  const W=700,H=220,PAD_L=52,PAD_R=52,PAD_T=16,PAD_B=28;
+  const chartW=W-PAD_L-PAD_R;
+  const chartH=H-PAD_T-PAD_B;
+  const barW=chartW/pits.length;
+
+  // Funciones de escala
+  const tonY=(t)=>PAD_T+chartH-(t/maxTon)*chartH;
+  const vanY=(v)=>PAD_T+chartH-(((v-minVan)/vanRange)*chartH);
+
+  // Puntos de curvas
+  const pts=(key)=>pits.map((p,i)=>`${PAD_L+(i+0.5)*barW},${Math.max(PAD_T,Math.min(PAD_T+chartH,vanY(p[key]||0)))}`).join(" ");
+
+  // Ticks eje Y tonelaje (izquierda)
+  const tonTicks=[0,maxTon*0.25,maxTon*0.5,maxTon*0.75,maxTon];
+  // Ticks eje Y VAN (derecha)  
+  const vanStep=(maxVan-minVan)/4;
+  const vanTicks=[minVan,minVan+vanStep,minVan+vanStep*2,minVan+vanStep*3,maxVan];
+
   return(
     <div style={{background:"var(--card)",borderRadius:10,border:"1px solid var(--brd)",padding:"8px 10px",marginTop:4}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
         <span style={{fontSize:11,fontWeight:600,color:"var(--txt)"}}>Pozo por pozo</span>
         <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-          {[["rgba(250,200,0,.85)","Mineral","rect"],["rgba(120,130,150,.6)","Estéril","rect"],["#60a5fa","Mejor","line"],["var(--acc)","Especulación","line"],["#f87171","El peor","line"]].map(([c,l,t])=>(
+          {[["rgba(250,200,0,.85)","Mineral","rect"],["rgba(120,130,150,.6)","Estéril","rect"],["#60a5fa","Mejor","line"],["#00d4ff","Especulación","line"],["#f87171","El peor","line"]].map(([c,l,t])=>(
             <div key={l} style={{display:"flex",alignItems:"center",gap:3,fontSize:9,color:"var(--txt2)"}}>
               <div style={{width:t==="line"?18:8,height:t==="line"?2:5,borderRadius:1,background:c}}/>{l}
             </div>
@@ -700,45 +716,81 @@ function PitByPitChart({pits,onSelect,selecto}){
           <span style={{fontSize:9,padding:"2px 7px",borderRadius:8,background:"rgba(0,212,255,.12)",color:"var(--acc)",fontWeight:600}}>Óptimo: Pit {optimo.pit}</span>
         </div>
       </div>
-      <svg width="100%" height="100%" viewBox={`0 0 ${W} ${PAD_T+BAR_H+CURVE_H+PAD_B}`} preserveAspectRatio="none" style={{display:"block",cursor:"pointer"}}
+      <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{display:"block",cursor:"pointer",overflow:"visible"}}
         onClick={e=>{
           const rect=e.currentTarget.getBoundingClientRect();
           const x=(e.clientX-rect.left)/(rect.width/W)-PAD_L;
-          const idx=Math.floor(x/gap);
+          const idx=Math.floor(x/barW);
           if(idx>=0&&idx<pits.length){const p=pits[idx];onSelect(selecto===p.pit?null:p.pit);}
         }}>
-        <line x1={PAD_L} y1={PAD_T} x2={PAD_L} y2={PAD_T+BAR_H} stroke="#2a3a4a" strokeWidth="0.5"/>
-        <text x={PAD_L-3} y={PAD_T+6} textAnchor="end" fontSize="7" fill="#6b8099">{maxTon.toFixed(1)}Mt</text>
-        <text x={PAD_L-3} y={PAD_T+BAR_H-1} textAnchor="end" fontSize="7" fill="#6b8099">0</text>
+
+        {/* Grid horizontal */}
+        {tonTicks.map((t,i)=>(
+          <g key={i}>
+            <line x1={PAD_L} y1={tonY(t)} x2={W-PAD_R} y2={tonY(t)} stroke="#1f2937" strokeWidth={i===0?1:0.4} strokeDasharray={i===0?"none":"4,3"}/>
+            <text x={PAD_L-4} y={tonY(t)+4} textAnchor="end" fontSize="8" fill="#6b8099">{(t/1e6).toFixed(1)}</text>
+          </g>
+        ))}
+
+        {/* Etiqueta eje Y izquierdo */}
+        <text x={10} y={PAD_T+chartH/2} textAnchor="middle" fontSize="8" fill="#6b8099" transform={`rotate(-90,10,${PAD_T+chartH/2})`}>Tonelaje (Mt)</text>
+
+        {/* Barras de tonelaje */}
         {pits.map((p,i)=>{
-          const isOpt=p.pit===optimo.pit,isSel=selecto===p.pit;
-          const eH=Math.max(1,((p.tonEst||0)/maxTon)*BAR_H);
-          const mH=Math.max(1,((p.tonMin||0)/maxTon)*BAR_H);
-          const x=PAD_L+i*gap+gap*.1,bw=Math.max(1,gap*.8);
+          const isOpt=p.pit===optimo.pit;
+          const isSel=selecto===p.pit;
+          const mH=Math.max(1,((p.tonMin||0)/maxTon)*chartH);
+          const eH=Math.max(1,((p.tonEst||0)/maxTon)*chartH);
+          const x=PAD_L+i*barW+barW*.05;
+          const bw=barW*.9;
           return(
             <g key={i} opacity={selecto&&!isSel?0.35:1}>
-              <rect x={x} y={PAD_T+BAR_H-eH-mH} width={bw} height={eH} fill={isSel?"rgba(180,190,210,.9)":isOpt?"rgba(150,165,185,.8)":"rgba(80,95,115,.55)"}/>
-              <rect x={x} y={PAD_T+BAR_H-mH} width={bw} height={mH} fill={isSel?"#fde047":isOpt?"rgba(255,210,0,.95)":"rgba(250,200,0,.7)"}/>
-              {isOpt&&<rect x={x} y={PAD_T} width={bw} height={BAR_H} fill="rgba(0,212,255,.06)"/>}
+              <rect x={x} y={PAD_T+chartH-mH-eH} width={bw} height={eH} fill={isSel?"rgba(180,190,210,.9)":isOpt?"rgba(150,165,185,.8)":"rgba(80,95,115,.55)"}/>
+              <rect x={x} y={PAD_T+chartH-mH} width={bw} height={mH} fill={isSel?"#fde047":isOpt?"rgba(255,210,0,.95)":"rgba(250,200,0,.7)"}/>
+              {isOpt&&<rect x={x} y={PAD_T} width={bw} height={chartH} fill="rgba(0,212,255,.04)"/>}
             </g>
           );
         })}
-        <line x1={PAD_L} y1={PAD_T+BAR_H} x2={W-PAD_R} y2={PAD_T+BAR_H} stroke="#2a3a4a" strokeWidth="1"/>
-        <line x1={W-PAD_R} y1={PAD_T+BAR_H} x2={W-PAD_R} y2={PAD_T+BAR_H+CURVE_H} stroke="#2a3a4a" strokeWidth="0.5"/>
-        <text x={W-PAD_R+3} y={PAD_T+BAR_H+8} textAnchor="start" fontSize="7" fill="#6b8099">{minVan.toFixed(0)}M</text>
-        <text x={W-PAD_R+3} y={PAD_T+BAR_H+CURVE_H} textAnchor="start" fontSize="7" fill="#6b8099">{maxVan.toFixed(0)}M</text>
-        <line x1={PAD_L} y1={PAD_T+BAR_H+CURVE_H/2} x2={W-PAD_R} y2={PAD_T+BAR_H+CURVE_H/2} stroke="#1f2937" strokeWidth="0.3" strokeDasharray="3,3"/>
-        <polyline points={curvePts("vanBest",CURVE_H)} fill="none" stroke="#60a5fa" strokeWidth="1.5" strokeDasharray="5,3"/>
-        <polyline points={curvePts("vanSpec",CURVE_H)} fill="none" stroke="#00d4ff" strokeWidth="2.5"/>
-        <polyline points={curvePts("vanWorst",CURVE_H)} fill="none" stroke="#f87171" strokeWidth="1.5" strokeDasharray="5,3"/>
-        {optimo&&<line x1={PAD_L+optimo.pit*gap-gap/2} y1={PAD_T} x2={PAD_L+optimo.pit*gap-gap/2} y2={PAD_T+BAR_H+CURVE_H} stroke="var(--acc)" strokeWidth="1" strokeDasharray="3,2"/>}
-        <text x={PAD_L} y={PAD_T+BAR_H+CURVE_H+PAD_B-3} fontSize="7" fill="#6b8099">Pit 1</text>
-        <text x={W/2} y={PAD_T+BAR_H+CURVE_H+PAD_B-3} textAnchor="middle" fontSize="7" fill="#6b8099">Factor de ingresos</text>
-        <text x={W-PAD_R} y={PAD_T+BAR_H+CURVE_H+PAD_B-3} textAnchor="end" fontSize="7" fill="#6b8099">Pit {pits.length}</text>
+
+        {/* Línea base */}
+        <line x1={PAD_L} y1={PAD_T+chartH} x2={W-PAD_R} y2={PAD_T+chartH} stroke="#374151" strokeWidth="1"/>
+
+        {/* Eje Y derecho - VAN */}
+        <line x1={W-PAD_R} y1={PAD_T} x2={W-PAD_R} y2={PAD_T+chartH} stroke="#374151" strokeWidth="0.5"/>
+        {vanTicks.map((v,i)=>(
+          <g key={i}>
+            <text x={W-PAD_R+4} y={vanY(v)+4} textAnchor="start" fontSize="8" fill="#6b8099">{(v/1e6).toFixed(0)}M</text>
+          </g>
+        ))}
+        <text x={W-12} y={PAD_T+chartH/2} textAnchor="middle" fontSize="8" fill="#6b8099" transform={`rotate(90,${W-12},${PAD_T+chartH/2})`}>VAN (MUSD)</text>
+
+        {/* Línea VAN=0 si está en rango */}
+        {minVan<0&&maxVan>0&&(
+          <line x1={PAD_L} y1={vanY(0)} x2={W-PAD_R} y2={vanY(0)} stroke="#f87171" strokeWidth="0.5" strokeDasharray="4,3" opacity="0.5"/>
+        )}
+
+        {/* Curvas NPV superpuestas sobre barras */}
+        <polyline points={pts("vanBest")} fill="none" stroke="#60a5fa" strokeWidth="2" strokeDasharray="6,3"/>
+        <polyline points={pts("vanSpec")} fill="none" stroke="#00d4ff" strokeWidth="2.5"/>
+        <polyline points={pts("vanWorst")} fill="none" stroke="#f87171" strokeWidth="2" strokeDasharray="6,3"/>
+
+        {/* Línea vertical pit óptimo */}
+        {optimo&&(
+          <line
+            x1={PAD_L+(optimo.pit-0.5)*barW} y1={PAD_T}
+            x2={PAD_L+(optimo.pit-0.5)*barW} y2={PAD_T+chartH}
+            stroke="#00d4ff" strokeWidth="1.5" strokeDasharray="4,3"/>
+        )}
+
+        {/* Ejes X labels */}
+        <text x={PAD_L} y={H-6} fontSize="8" fill="#6b8099">Pit 1</text>
+        <text x={W/2} y={H-6} textAnchor="middle" fontSize="8" fill="#6b8099">Factor de ingresos</text>
+        <text x={W-PAD_R} y={H-6} textAnchor="end" fontSize="8" fill="#6b8099">Pit {pits.length}</text>
       </svg>
     </div>
   );
 }
+
 
 // ── ResizablePitChart (con handle de redimensionado) ─────────────
 function ResizablePitChart({pits,onSelect,selecto}){
