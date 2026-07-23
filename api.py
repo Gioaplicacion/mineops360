@@ -1,6 +1,7 @@
 """
 MineOps 360 — API FastAPI corregida
 Fix: "no running event loop" en Railway
+Nuevo: soporte para archivos .asc (separados por espacio)
 """
 
 import asyncio
@@ -12,6 +13,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
+from io import StringIO
 
 import pandas as pd
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
@@ -48,6 +50,132 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 # ThreadPoolExecutor para correr el pipeline sin bloquear
 executor = ThreadPoolExecutor(max_workers=2)
 
+# Mapeo de columnas alternativas (.asc y otros formatos mineros)
+COLUMN_MAP = {
+    "east":      "X",
+    "este":      "X",
+    "north":     "Y",
+    "norte":     "Y",
+    "elev":      "Z",
+    "elevation": "Z",
+    "z_coord":   "Z",
+    "tones":     "tonelaje",
+    "tonnes":    "tonelaje",
+    "ton":       "tonelaje",
+    "sg":        "dens",
+    "density":   "dens",
+    "class":     "fase",
+    "roca":      "tipo_roca",
+}
+
+# Metales reconocidos con sus símbolos y unidades
+METALES_RECONOCIDOS = {
+    "cu":    {"simbolo": "Cu", "nombre": "Cobre",     "unidad": "%"},
+    "cu_pct":{"simbolo": "Cu", "nombre": "Cobre",     "unidad": "%"},
+    "au":    {"simbolo": "Au", "nombre": "Oro",       "unidad": "g/t"},
+    "au_gt": {"simbolo": "Au", "nombre": "Oro",       "unidad": "g/t"},
+    "ag":    {"simbolo": "Ag", "nombre": "Plata",     "unidad": "g/t"},
+    "ag_gt": {"simbolo": "Ag", "nombre": "Plata",     "unidad": "g/t"},
+    "ni":    {"simbolo": "Ni", "nombre": "Niquel",    "unidad": "%"},
+    "li":    {"simbolo": "Li", "nombre": "Litio",     "unidad": "%"},
+    "co":    {"simbolo": "Co", "nombre": "Cobalto",   "unidad": "%"},
+    "zn":    {"simbolo": "Zn", "nombre": "Zinc",      "unidad": "%"},
+    "fe":    {"simbolo": "Fe", "nombre": "Hierro",    "unidad": "%"},
+    "mo":    {"simbolo": "Mo", "nombre": "Molibdeno", "unidad": "%"},
+    "grade": {"simbolo": "Cu", "nombre": "Cobre",     "unidad": "%"},
+    "ley":   {"simbolo": "Cu", "nombre": "Cobre",     "unidad": "%"},
+}
+
+def convertir_asc_a_csv(contenido_bytes: bytes, filename: str) -> bytes:
+    """
+    Convierte un archivo .asc (separado por espacios) a CSV estándar.
+    También maneja archivos CSV con columnas de nombres alternativos.
+    Filtra automáticamente info=1 si existe esa columna.
+    Subamplea si el archivo tiene más de 50,000 bloques.
+    """
+    texto = contenido_bytes.decode("utf-8", errors="ignore")
+    primera_linea = texto.split("\n")[0].strip()
+
+    # Detectar separador
+    if "," in primera_linea:
+        sep = ","
+    else:
+        sep = r"\s+"
+
+    try:
+        df = pd.read_csv(StringIO(texto), sep=sep, engine="python")
+    except Exception as e:
+        logger.error(f"Error leyendo archivo {filename}: {e}")
+        raise ValueError(f"No se pudo leer el archivo: {e}")
+
+    logger.info(f"Archivo {filename}: {len(df)} filas, columnas: {list(df.columns)}")
+
+    # Normalizar nombres de columnas
+    df.columns = [c.strip() for c in df.columns]
+    rename_dict = {}
+    for col in df.columns:
+        col_lower = col.lower()
+        if col_lower in COLUMN_MAP:
+            rename_dict[col] = COLUMN_MAP[col_lower]
+    if rename_dict:
+        df = df.rename(columns=rename_dict)
+        logger.info(f"Columnas renombradas: {rename_dict}")
+
+    # Filtrar info=1 si existe columna info
+    if "info" in df.columns:
+        total_original = len(df)
+        df = df[df["info"] == 1].copy()
+        logger.info(f"Filtrado info=1: {len(df)} de {total_original} bloques")
+
+    # Verificar columnas mínimas requeridas
+    cols_requeridas = ["X", "Y", "Z"]
+    faltantes = [c for c in cols_requeridas if c not in df.columns]
+    if faltantes:
+        raise ValueError(f"Columnas requeridas no encontradas: {faltantes}. Columnas disponibles: {list(df.columns)}")
+
+    # Detectar metal automáticamente desde los nombres de columna
+    metal_detectado = None
+    col_metal_original = None
+    for col in df.columns:
+        col_lower = col.lower().strip()
+        if col_lower in METALES_RECONOCIDOS:
+            metal_detectado = METALES_RECONOCIDOS[col_lower]
+            col_metal_original = col
+            break
+
+    # Renombrar columna del metal a "ley" (nombre genérico para el pipeline)
+    if col_metal_original and col_metal_original in df.columns:
+        df = df.rename(columns={col_metal_original: "ley"})
+        logger.info(f"Metal detectado: {metal_detectado['nombre']} ({metal_detectado['simbolo']}) en columna '{col_metal_original}'")
+    elif "Cu" in df.columns:
+        df = df.rename(columns={"Cu": "ley"})
+        metal_detectado = METALES_RECONOCIDOS["cu"]
+    elif "ley" not in df.columns:
+        df["ley"] = 0.0
+        metal_detectado = {"simbolo": "Cu", "nombre": "Cobre", "unidad": "%"}
+        logger.warning("No se encontró columna de ley, usando ley=0")
+
+    # Subsamplear si es muy grande (más de 50,000 bloques)
+    MAX_BLOQUES = 50000
+    if len(df) > MAX_BLOQUES:
+        factor = len(df) // MAX_BLOQUES
+        df = df.iloc[::factor].head(MAX_BLOQUES).copy()
+        logger.info(f"Subsamplado a {len(df)} bloques (1 de cada {factor})")
+
+    # Seleccionar columnas relevantes para el pipeline
+    cols_salida = ["X", "Y", "Z", "ley"]
+    if "tonelaje" in df.columns:
+        cols_salida.append("tonelaje")
+    if "dens" in df.columns:
+        cols_salida.append("dens")
+
+    df_out = df[[c for c in cols_salida if c in df.columns]]
+    logger.info(f"CSV final: {len(df_out)} bloques, columnas: {list(df_out.columns)}")
+
+    # Retornar CSV + metadato del metal detectado
+    csv_bytes = df_out.to_csv(index=False).encode("utf-8")
+    return csv_bytes, metal_detectado
+
 
 @app.get("/")
 async def root():
@@ -67,8 +195,29 @@ async def run_pipeline(
 ):
     job_id = str(uuid.uuid4())
 
+    # Leer contenido del archivo
+    contenido = await modelo_csv.read()
+    filename = modelo_csv.filename or "modelo.csv"
+
+    # Convertir .asc o normalizar columnas si es necesario
+    extension = Path(filename).suffix.lower()
+    primera_linea = contenido[:200].decode("utf-8", errors="ignore").split("\n")[0]
+    tiene_columnas_alternativas = any(
+        col in primera_linea.lower()
+        for col in ["east", "north", "elev", "au_gt", "tones", "tonnes", "info"]
+    )
+
+    metal_info = None
+    if extension == ".asc" or tiene_columnas_alternativas:
+        logger.info(f"Convirtiendo archivo {filename} a CSV estándar...")
+        try:
+            contenido, metal_info = convertir_asc_a_csv(contenido, filename)
+            logger.info(f"Conversión exitosa - Metal: {metal_info}")
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
     csv_path = UPLOAD_DIR / f"{job_id}_modelo.csv"
-    csv_path.write_bytes(await modelo_csv.read())
+    csv_path.write_bytes(contenido)
 
     fases_path = None
     if fases_csv:
@@ -85,11 +234,11 @@ async def run_pipeline(
         "progress": {"paso": 0, "total": 4, "mensaje": "En cola..."},
         "result":   None,
         "error":    None,
+        "metal_info": metal_info,
         "created_at": time.time(),
     }
     WS_CLIENTS[job_id] = []
 
-    # FIX: usar asyncio.create_task correctamente
     asyncio.create_task(_run_job(job_id, csv_path, fases_path, params))
 
     return {"job_id": job_id, "status": "queued", "ws_url": f"/ws/{job_id}"}
@@ -151,20 +300,18 @@ async def ws_progress(websocket: WebSocket, job_id: str):
 
 
 async def _run_job(job_id, csv_path, fases_path, params):
-    """FIX: ejecuta el pipeline en threadpool para no bloquear el event loop."""
+    """Ejecuta el pipeline en threadpool para no bloquear el event loop."""
     JOBS[job_id]["status"] = "running"
     loop = asyncio.get_event_loop()
 
     def progress_cb(paso, total, mensaje):
         JOBS[job_id]["progress"] = {"paso": paso, "total": total, "mensaje": mensaje}
-        # FIX: usar call_soon_threadsafe para notificar desde el thread
         asyncio.run_coroutine_threadsafe(
             _broadcast(job_id, {"paso": paso, "total": total, "mensaje": mensaje, "status": "running"}),
             loop
         )
 
     def _run_sync():
-        """Corre el pipeline de forma síncrona en el threadpool."""
         try:
             config   = ProjectConfig.desde_dict(params)
             pipeline = MineOpsPipeline(config, progress_cb=progress_cb)
@@ -174,7 +321,6 @@ async def _run_job(job_id, csv_path, fases_path, params):
             raise e
 
     try:
-        # FIX: correr en executor para no bloquear el event loop
         resultado = await loop.run_in_executor(executor, _run_sync)
 
         resultado.bloques_df.to_csv(OUTPUT_DIR / f"{job_id}_bloques.csv", index=False)
@@ -188,6 +334,7 @@ async def _run_job(job_id, csv_path, fases_path, params):
             "resumen_modelo":   resultado.resumen_modelo,
             "resumen_pits":     resultado.resumen_pits,
             "plan_minero":      resultado.plan_minero,
+            "metal_info":       JOBS[job_id].get("metal_info"),
             "download_bloques": f"/api/download/{job_id}/bloques",
             "download_plan":    f"/api/download/{job_id}/plan",
         }
