@@ -906,8 +906,11 @@ function App(){
                 }
                 // Tonelaje real del plan si está disponible
                 const perIdx=Math.min(i,periodos.length-1);
-                const tonMin=periodos[perIdx]?(periodos[perIdx].mineral_mined_Mt||rf*3*1.1):rf*3*1.1;
-                const tonEst=periodos[perIdx]?(periodos[perIdx].waste_mined_Mt||rf*1.8):rf*1.8;
+                // Usar tonelaje real del resumen_modelo para escalar
+                const tonTotalMt=data.resumen_modelo?.tonelaje_total_Mt||75;
+                const tonMineralMt=data.resumen_modelo?.tonelaje_mineral_Mt||62;
+                const tonMin=periodos[perIdx]?(periodos[perIdx].mineral_mined_Mt||rf*tonMineralMt):rf*tonMineralMt;
+                const tonEst=periodos[perIdx]?(periodos[perIdx].waste_mined_Mt||rf*(tonTotalMt-tonMineralMt)):rf*(tonTotalMt-tonMineralMt);
                 return {pit:i+1,rf:Math.round(rf*100)/100,
                   tonMin:Math.round(tonMin*10)/10,
                   tonEst:Math.round(tonEst*10)/10,
@@ -922,9 +925,11 @@ function App(){
                 let v;
                 if(i<=optIdx){v=van*(0.15+0.85*Math.pow((i+1)/(optIdx+1),0.85));}
                 else{const dp=(i-optIdx)/(n-optIdx);v=van*(1-dp*0.18);}
+                const tonTotalMt2=data.resumen_modelo?.tonelaje_total_Mt||75;
+                const tonMineralMt2=data.resumen_modelo?.tonelaje_mineral_Mt||62;
                 return {pit:i+1,rf:Math.round(rf*100)/100,
-                  tonMin:Math.round(rf*3*1.1*10)/10,
-                  tonEst:Math.round(rf*1.8*10)/10,
+                  tonMin:Math.round(rf*tonMineralMt2*10)/10,
+                  tonEst:Math.round(rf*(tonTotalMt2-tonMineralMt2)*10)/10,
                   vanBest:v*1.15,vanWorst:v*0.72,vanSpec:v};
               });
             }
@@ -1011,68 +1016,37 @@ function App(){
       setLoadingBlocks(true);
       try{parseAndSetBlocks(csvCompletoTexto,true);}finally{setLoadingBlocks(false);}
     }
-
-    const CHUNK_SIZE=5*1024*1024; // 5MB por parte
-    const usarChunks=csv.size>10*1024*1024; // Usar chunks si >10MB
-
+    const form=new FormData();
+    // Si el CSV tiene columna info, filtrar solo info=1 para el backend
+    let csvParaBackend=csv;
     try{
-      let jobId;
-      if(usarChunks){
-        // ── CARGA POR PARTES ──────────────────────────────────
-        const totalChunks=Math.ceil(csv.size/CHUNK_SIZE);
-        setProgress({paso:0,total:4,mensaje:`Subiendo archivo (0/${totalChunks} partes)...`});
-
-        // 1. Inicializar upload
-        const initForm=new FormData();
-        initForm.append("filename",csv.name);
-        initForm.append("total_chunks",totalChunks);
-        initForm.append("total_size",csv.size);
-        const initRes=await fetch(`${API}/api/upload/init`,{method:"POST",body:initForm});
-        if(!initRes.ok)throw new Error(`Error iniciando upload: HTTP ${initRes.status}`);
-        const {upload_id}=await initRes.json();
-
-        // 2. Enviar partes
-        for(let i=0;i<totalChunks;i++){
-          const start=i*CHUNK_SIZE;
-          const end=Math.min(start+CHUNK_SIZE,csv.size);
-          const chunkBlob=csv.slice(start,end);
-          const chunkForm=new FormData();
-          chunkForm.append("upload_id",upload_id);
-          chunkForm.append("chunk_index",i);
-          chunkForm.append("chunk",chunkBlob,`chunk_${i}`);
-          const chunkRes=await fetch(`${API}/api/upload/chunk`,{method:"POST",body:chunkForm});
-          if(!chunkRes.ok)throw new Error(`Error en parte ${i}: HTTP ${chunkRes.status}`);
-          setProgress({paso:0,total:4,mensaje:`Subiendo archivo (${i+1}/${totalChunks} partes)...`});
-        }
-
-        // 3. Completar y ejecutar pipeline
-        setProgress({paso:0,total:4,mensaje:"Procesando archivo..."});
-        const completeForm=new FormData();
-        completeForm.append("upload_id",upload_id);
-        completeForm.append("params_json",JSON.stringify(params));
-        const completeRes=await fetch(`${API}/api/upload/complete`,{method:"POST",body:completeForm});
-        if(!completeRes.ok)throw new Error(`Error completando upload: HTTP ${completeRes.status}`);
-        const completeData=await completeRes.json();
-        jobId=completeData.job_id;
-
-      } else {
-        // ── CARGA NORMAL (archivos pequeños <10MB) ────────────
-        const form=new FormData();
-        form.append("modelo_csv",csv);
-        form.append("params_json",JSON.stringify(params));
-        const res=await fetch(`${API}/api/run`,{method:"POST",body:form});
-        if(!res.ok)throw new Error(`HTTP ${res.status}`);
-        const data=await res.json();
-        jobId=data.job_id;
+      const text=await csv.text();
+      const lines=text.trim().split("\n");
+      const headers=lines[0].split(",").map(h=>h.trim().toLowerCase());
+      if(headers.includes("info")){
+        const filtradas=lines.slice(1).filter(l=>{
+          const vals=l.split(",");
+          const infoIdx=headers.indexOf("info");
+          return vals[infoIdx]&&vals[infoIdx].trim()==="1";
+        });
+        const csvFiltrado=[lines[0],...filtradas].join("\n");
+        csvParaBackend=new Blob([csvFiltrado],{type:"text/csv"});
+        console.log("CSV filtrado para backend: info=1, bloques:",filtradas.length);
       }
-
-      setJobId(jobId);
+    }catch(e){console.warn("No se pudo filtrar CSV:",e);}
+    form.append("modelo_csv",csvParaBackend);
+    form.append("params_json",JSON.stringify(params));
+    try{
+      const res=await fetch(`${API}/api/run`,{method:"POST",body:form});
+      if(!res.ok)throw new Error(`HTTP ${res.status}`);
+      const data=await res.json();
+      setJobId(data.job_id);
       const iv=setInterval(async()=>{
         try{
-          const d=await(await fetch(`${API}/api/jobs/${jobId}`)).json();
+          const d=await(await fetch(`${API}/api/jobs/${data.job_id}`)).json();
           setProgress(d.progress||{paso:0,total:4,mensaje:""});
           setStatus(d.status);
-          if(d.status==="done"){clearInterval(iv);await loadResults(jobId);}
+          if(d.status==="done"){clearInterval(iv);await loadResults(data.job_id);}
           else if(d.status==="error"){clearInterval(iv);setError(d.error||"Error");setStatus("error");}
         }catch(e){}
       },1500);
