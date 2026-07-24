@@ -906,8 +906,8 @@ function App(){
                 }
                 // Tonelaje real del plan si está disponible
                 const perIdx=Math.min(i,periodos.length-1);
-                const tonMin=periodos[perIdx]?(periodos[perIdx].mineral_mined_Mt||rf*3*1.1):rf*3*1.1;
-                const tonEst=periodos[perIdx]?(periodos[perIdx].waste_mined_Mt||rf*1.8):rf*1.8;
+                const tonMin=periodos[perIdx]?(periodos[perIdx].mineral_mined_Mt||rf*62):rf*62;
+                const tonEst=periodos[perIdx]?(periodos[perIdx].waste_mined_Mt||rf*13):rf*13;
                 return {pit:i+1,rf:Math.round(rf*100)/100,
                   tonMin:Math.round(tonMin*10)/10,
                   tonEst:Math.round(tonEst*10)/10,
@@ -923,8 +923,8 @@ function App(){
                 if(i<=optIdx){v=van*(0.15+0.85*Math.pow((i+1)/(optIdx+1),0.85));}
                 else{const dp=(i-optIdx)/(n-optIdx);v=van*(1-dp*0.18);}
                 return {pit:i+1,rf:Math.round(rf*100)/100,
-                  tonMin:Math.round(rf*3*1.1*10)/10,
-                  tonEst:Math.round(rf*1.8*10)/10,
+                  tonMin:Math.round(rf*62*10)/10,
+                  tonEst:Math.round(rf*13*10)/10,
                   vanBest:v*1.15,vanWorst:v*0.72,vanSpec:v};
               });
             }
