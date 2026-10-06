@@ -173,8 +173,26 @@ class HeuristicaFaseBanco:
         res_rows     = []
         total_van    = 0.0
 
-        # Período de inicio por fase (lag)
-        fase_start_period = {f: (i * cfg.lag_fase + 1) for i, f in enumerate(phases)}
+        # Compuerta de apertura por avance: la fase N se abre cuando la fase N-1
+        # ya terminó `lag_fase` bancos (o toda la fase si tiene menos bancos).
+        fase_prev = {f: (phases[i - 1] if i > 0 else None) for i, f in enumerate(phases)}
+
+        def bancos_completados(fase) -> int:
+            n = 0
+            for pz in fase_bancos[fase]:
+                key = (fase, pz)
+                if panel_cursors.get(key, 0) >= len(panel_sequence.get(key, [])):
+                    n += 1
+                else:
+                    break
+            return n
+
+        def fase_abierta(fase) -> bool:
+            prev = fase_prev[fase]
+            if prev is None:
+                return True
+            requeridos = min(cfg.lag_fase, len(fase_bancos[prev]))
+            return bancos_completados(prev) >= requeridos
 
         # ─── BUCLE PRINCIPAL ───────────────────────────────────────────
         for t in range(1, cfg.horizontes + 1):
@@ -192,7 +210,7 @@ class HeuristicaFaseBanco:
 
             # Minar paneles por fase y banco
             for fase in phases:
-                if t < fase_start_period.get(fase, 1):
+                if not fase_abierta(fase):
                     continue
                 for pz in fase_bancos[fase]:
                     key = (fase, pz)
@@ -275,7 +293,7 @@ class HeuristicaFaseBanco:
 
             cap_planta = cfg.cap_planta_t
             # Primero feed fresco (económico ya en SP)
-            pull_econ, metal_pull_econ = sp_economic.retirar(min(cap_planta, ton_econ_t))
+            pull_econ, metal_pull_econ = sp_economic.retirar(min(cap_planta, sp_economic.get_inventory()[0]))
             feed_total += pull_econ
             metal_feed += metal_pull_econ
             ton_fresh  += pull_econ
@@ -313,9 +331,11 @@ class HeuristicaFaseBanco:
                 "cutoff_econ_pct":      lc_econ_t,
             })
 
-            if tons_ore_t < 1.0 and tons_waste_t < 1.0:
-                if not np.any(~mined_mask):
-                    logger.info(f"Modelo completamente minado en período {t}.")
+            if mined_mask.all():
+                inv_m_fin, _ = sp_marginal.get_inventory()
+                inv_e_fin, _ = sp_economic.get_inventory()
+                if inv_m_fin + inv_e_fin < 1.0:
+                    logger.info(f"Modelo completamente minado y procesado en período {t}.")
                     break
 
         # ─── ARMAR RESULTADO ───────────────────────────────────────────
