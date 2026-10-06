@@ -91,6 +91,18 @@ class MineOpsPipeline:
         opt_result = optimizar_pits(modelo, progress_cb=self.progress_cb)
         result.resumen_pits = opt_result.to_dict()
 
+        # Pit final del plan = pit con mayor VAN del caso especificado.
+        # Los pits más grandes (factor de ingresos alto) quedan fuera del plan.
+        pit_final = opt_result.pit_optimo
+        if pit_final is None:
+            raise ValueError(
+                "Ningún pit tiene VAN positivo con los parámetros económicos dados "
+                "(precio, costos, recuperación y capacidades). Revisa los parámetros."
+            )
+        df_pit_final = opt_result.df[opt_result.df["pit"] <= pit_final].copy()
+        result.resumen_pits["pit_final"] = int(pit_final)
+        result.resumen_pits["bloques_pit_final"] = int(len(df_pit_final))
+
         # ── PASO 3: Faseamiento con Recocido Simulado ──────────────────
         self._emit(3, "Faseamiento con Recocido Simulado (¿Cómo?)...")
         if fases_df is None:
@@ -106,7 +118,7 @@ class MineOpsPipeline:
                 sa_config   = sa_config,
                 progress_cb = self.progress_cb,
             )
-            res_fases = faseador.ejecutar(opt_result.df)
+            res_fases = faseador.ejecutar(df_pit_final)
             fases_df  = res_fases.df.rename(columns={'x':'X','y':'Y','z':'Z','ley':'Ley'})
             if 'Ley' not in fases_df.columns and 'cu' in fases_df.columns:
                 fases_df = fases_df.rename(columns={'cu':'Ley'})

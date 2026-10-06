@@ -66,8 +66,11 @@ class EconomicConfig:
 @dataclass
 class PitOptimizerConfig:
     """Parámetros del optimizador MaxFlow (Lerchs-Grossmann)."""
-    num_escenarios: int = 20        # número de Revenue Factors
-    precio_base: float = 4.0       # USD/lb precio máximo
+    num_escenarios: int = 25        # número de pits anidados (Revenue Factors)
+    rf_min: float = 0.30            # menor factor de ingresos (precio = rf × precio base)
+    rf_max: float = 1.50            # mayor factor; >1 permite ver dónde cae el VAN
+    num_fases_especificado: int = 4 # fases del "caso especificado" de la curva de VAN
+    precio_base: float = 4.0       # USD/lb; se sincroniza con economico.precio_metal
     n_niveles_talud: int = 6       # precisión del talud
     talud_este: float = 45.0       # grados
     talud_oeste: float = 45.0
@@ -121,6 +124,14 @@ class ProjectConfig:
         cfg.economico.costo_mina     = float(e.get("costo_mina", cfg.economico.costo_mina))
         cfg.economico.costo_planta   = float(e.get("costo_planta", cfg.economico.costo_planta))
         cfg.economico.tasa_descuento = float(e.get("tasa_descuento", cfg.economico.tasa_descuento))
+
+        # El factor de ingresos 1,0 siempre corresponde al precio del proyecto
+        cfg.optimizador.precio_base = cfg.economico.precio_metal
+
+        o = d.get("optimizador", {})
+        cfg.optimizador.num_escenarios = int(o.get("num_escenarios", cfg.optimizador.num_escenarios))
+        cfg.optimizador.rf_min = float(o.get("rf_min", cfg.optimizador.rf_min))
+        cfg.optimizador.rf_max = float(o.get("rf_max", cfg.optimizador.rf_max))
 
         s = d.get("scheduler", {})
         cfg.scheduler.cap_mineral_t    = float(s.get("cap_mineral_t", cfg.scheduler.cap_mineral_t))
