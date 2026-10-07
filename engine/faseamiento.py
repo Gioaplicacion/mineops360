@@ -142,6 +142,10 @@ class FaseamientoSimAnnealing:
         # ── Fase 2: Recocido Simulado para optimizar pushbacks ───────────
         mejor_df, convergencia = self._recocido_simulado(df, x_centro, y_centro)
 
+        # ── Fase 2b: precedencia por talud → cada fase acumulada es un cono ──
+        talud = self._talud_global()
+        mejor_df = self._cierre_precedencia(mejor_df, talud)
+
         # ── Fase 3: Calcular métricas por fase ──────────────────────────
         van_por_fase, ton_por_fase = self._calcular_metricas_fases(mejor_df)
 
@@ -156,6 +160,92 @@ class FaseamientoSimAnnealing:
             convergencia = convergencia,
             tiempo_s     = time.time() - t0,
         )
+
+    # ── Talud global y cierre por precedencia (geometría de conos) ───────
+    def _talud_global(self) -> float:
+        """Talud más restrictivo (menor) de los sectores configurados; 45° por defecto."""
+        try:
+            o = self.config.optimizer
+            return float(min(o.talud_este, o.talud_oeste, o.talud_norte, o.talud_sur))
+        except Exception:
+            return 45.0
+
+    @staticmethod
+    def _paso_malla(v) -> float:
+        u = np.unique(np.round(np.asarray(v, float), 3))
+        d = np.diff(u)
+        d = d[d > 1e-6]
+        return float(d.min()) if len(d) else 1.0
+
+    def _tan_efectiva(self, df: pd.DataFrame) -> float:
+        """Talud efectivo en la malla: cada banco retrocede un número entero de bloques."""
+        tan = math.tan(math.radians(self._talud_global()))
+        dx = self._paso_malla(df['x']); dz = self._paso_malla(df['z'])
+        r = max(1, int(round(dz / tan / dx)))
+        return dz / (r * dx)
+
+    def _cierre_precedencia(self, df: pd.DataFrame, talud_deg: float = 45.0) -> pd.DataFrame:
+        """
+        Impone que la unión de las fases 1..k sea siempre un pit factible:
+        si un bloque pertenece a la fase p, todos los bloques que están sobre él
+        dentro del cono de talud deben minarse en una fase <= p.
+        Resultado: cada fase acumulada tiene forma de cono (paredes con el talud),
+        y no cilindros verticales como salen de la partición por distancia.
+        """
+        try:
+            x = df['x'].to_numpy(float); y = df['y'].to_numpy(float); z = df['z'].to_numpy(float)
+            def paso(v):
+                u = np.unique(np.round(v, 3))
+                d = np.diff(u)
+                d = d[d > 1e-6]
+                return float(d.min()) if len(d) else 1.0
+            dx, dy, dz = paso(x), paso(y), paso(z)
+            ix = np.rint((x - x.min()) / dx).astype(int)
+            iy = np.rint((y - y.min()) / dy).astype(int)
+            zs = np.unique(np.round(z, 3))
+            iz = np.searchsorted(zs, np.round(z, 3))
+            NX, NY, NZ = ix.max() + 1, iy.max() + 1, len(zs)
+            if NX * NY * NZ > 3e8:
+                logger.warning("Cierre de precedencia omitido: malla demasiado grande")
+                return df
+            # separación media entre bloques en la malla (modelos ralos): amplía el radio
+            rng = np.random.default_rng(1)
+            m = min(len(df), 400)
+            idx = rng.choice(len(df), m, replace=False)
+            pts = np.c_[ix, iy, iz * (dz / dx)]
+            dmin = []
+            for i in idx:
+                d = np.sqrt(((pts - pts[i]) ** 2).sum(1)); d[i] = 1e9
+                dmin.append(d.min())
+            pad = max(0, int(np.ceil(np.median(dmin))) - 1)
+            INF = 1e9
+            fase = df['fase'].to_numpy(float)
+            grids = np.full((NZ, NX, NY), INF, dtype=np.float32)
+            grids[iz, ix, iy] = fase
+            tan = np.tan(np.radians(talud_deg))
+            for l in range(1, NZ):
+                hz = (zs[l] - zs[l - 1])
+                r = max(1, int(round(hz / tan / dx))) + pad
+                prev = grids[l - 1]
+                padded = np.full((NX + 2 * r, NY + 2 * r), INF, dtype=np.float32)
+                padded[r:r + NX, r:r + NY] = prev
+                best = np.full((NX, NY), INF, dtype=np.float32)
+                for ox in range(-r, r + 1):
+                    for oy in range(-r, r + 1):
+                        if ox * ox + oy * oy > r * r + 0.5:
+                            continue
+                        np.minimum(best, padded[r + ox:r + ox + NX, r + oy:r + oy + NY], out=best)
+                grids[l] = np.minimum(grids[l], best)
+            nueva = grids[iz, ix, iy]
+            # solo se reasignan bloques existentes (los huecos no se rellenan)
+            df = df.copy()
+            cambiados = int((nueva != fase).sum())
+            df['fase'] = nueva.astype(int)
+            logger.debug(f"Cierre de precedencia (talud {talud_deg:.0f}°): {cambiados:,} bloques reasignados "
+                        f"-> {df['fase'].value_counts().sort_index().to_dict()}")
+        except Exception as e:
+            logger.warning(f"Cierre de precedencia omitido: {e}")
+        return df
 
     # ── Inicialización: fases concéntricas por distancia al centro ────────
     def _inicializar_fases_concentricas(
@@ -172,7 +262,11 @@ class FaseamientoSimAnnealing:
         n  = self.sa.num_fases
 
         # Distancia horizontal de cada bloque al centro
-        df['_dist'] = np.sqrt((df['x'] - x_c)**2 + (df['y'] - y_c)**2)
+        # Distancia "de cono": la frontera de cada fase sube abriéndose con el talud
+        # (cono invertido), así las fases acumuladas son pits y no cilindros verticales.
+        tan_t = self._tan_efectiva(df)
+        df['_dist'] = (np.sqrt((df['x'] - x_c)**2 + (df['y'] - y_c)**2)
+                       - (df['z'] - z_min) / tan_t)
         d_max = df['_dist'].max()
 
         # Dividir en N fases por cuantiles de distancia
@@ -208,6 +302,7 @@ class FaseamientoSimAnnealing:
         El resultado converge a fases con geometría de pushback real.
         """
         random.seed(42)
+        talud_sa = self._talud_global()
         T       = self.sa.temperatura_ini
         alpha   = self.sa.tasa_enfriamiento
         n_iter  = self.sa.iteraciones
@@ -248,6 +343,16 @@ class FaseamientoSimAnnealing:
                 if candidatas:
                     nueva_fase = random.choice(candidatas)
                     df_nuevo.at[idx, 'fase'] = nueva_fase
+
+            # Mantener factibilidad: toda fase acumulada debe seguir siendo un pit (talud)
+            df_nuevo = self._cierre_precedencia(df_nuevo, talud_sa)
+
+            # Fases equilibradas: ninguna puede quedar casi vacía (pushbacks con tamaño minable)
+            cnt = df_nuevo['fase'].value_counts()
+            if min(cnt.get(f, 0) for f in range(1, n_fases + 1)) < 0.12 * len(df_nuevo):
+                convergencia.append(round(mejor_van / 1e6, 4))
+                T *= alpha
+                continue
 
             # Evaluar VAN de la nueva solución
             van_nuevo = self._evaluar_van(df_nuevo)
