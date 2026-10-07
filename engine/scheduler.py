@@ -355,7 +355,10 @@ class HeuristicaFaseBanco:
             ), axis=1
         )
 
-        bloques_out = df[["X", "Y", "Z", "tonelaje", "Ley", "fase", "periodo"]].copy()
+        cols_out = ["X", "Y", "Z", "tonelaje", "Ley", "fase", "periodo"]
+        if "pit" in df.columns:          # pit anidado de cada bloque (para ver los pits en el visor)
+            cols_out.append("pit")
+        bloques_out = df[cols_out].copy()
 
         logger.info(f"✅ Scheduler completado en {time.time()-t0:.1f}s | VAN={total_van/1e6:,.2f} MUSD")
         return ResultadoScheduler(plan_df, bloques_out, total_van, self.config)

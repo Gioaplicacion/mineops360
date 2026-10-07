@@ -85,9 +85,11 @@ class SchedulerConfig:
     lag_fase: int = 3               # bancos de diferencia entre fases
     panel_size_x: float = 20.0     # tamaño panel X (m)
     panel_size_y: float = 20.0     # tamaño panel Y (m)
-    cap_mineral_t: float = 35_000_000.0   # capacidad mina mineral (t/año)
-    cap_movimiento_t: float = 70_000_000.0 # capacidad movimiento total (t/año)
-    cap_planta_t: float = 30_000_000.0    # capacidad planta (t/año)
+    # Mediana minería (Instituto de Ingenieros de Minas de Chile: 300–8.000 t de mineral/día).
+    # Planta ≈ 6.000 t/día; mina ≈ 6.600 t/día de mineral; movimiento total ≈ 20.500 t/día.
+    cap_mineral_t: float = 2_400_000.0     # capacidad mina mineral (t/año)
+    cap_movimiento_t: float = 7_500_000.0  # capacidad movimiento total (t/año)
+    cap_planta_t: float = 2_200_000.0      # capacidad planta (t/año)
     costo_remanejo: float = 0.60   # USD/t remanejo stockpile
     costo_holding: float = 0.05    # USD/t·período inventario
     usar_lane: bool = False         # activa cutoff dinámico Lane
