@@ -394,8 +394,14 @@ async def get_results(job_id: str):
 
 @app.get("/api/download/{job_id}/{tipo}")
 async def download(job_id: str, tipo: str):
-    if tipo not in ("bloques", "plan"):
-        raise HTTPException(status_code=400, detail="tipo debe ser 'bloques' o 'plan'")
+    if tipo not in ("bloques", "plan", "dxf"):
+        raise HTTPException(status_code=400, detail="tipo debe ser 'bloques', 'plan' o 'dxf'")
+    if tipo == "dxf":
+        archivo = OUTPUT_DIR / f"{job_id}_resultados.dxf"
+        if not archivo.exists():
+            raise HTTPException(status_code=404, detail="DXF no disponible para este job")
+        return FileResponse(str(archivo), media_type="application/dxf",
+                            filename=f"mineops_fases_periodos_pit_{job_id[:8]}.dxf")
     archivo = OUTPUT_DIR / f"{job_id}_{tipo}.csv"
     if not archivo.exists():
         raise HTTPException(status_code=404, detail="Archivo no encontrado")
@@ -457,6 +463,21 @@ async def _run_job(job_id, csv_path, fases_path, params):
         resultado.bloques_df.to_csv(OUTPUT_DIR / f"{job_id}_bloques.csv", index=False)
         resultado.plan_df.to_csv(OUTPUT_DIR / f"{job_id}_plan.csv", index=False)
 
+        # DXF: sólidos de fases, sólidos de períodos y superficie del pit final
+        dxf_ok = False
+        try:
+            from engine.dxf_export import generar_dxf
+            blq = params.get("bloque", {}) or {}
+            await loop.run_in_executor(
+                executor,
+                lambda: generar_dxf(resultado.bloques_df,
+                                    float(blq.get("xsiz", 20)), float(blq.get("ysiz", 20)),
+                                    float(blq.get("zsiz", 15)),
+                                    str(OUTPUT_DIR / f"{job_id}_resultados.dxf")))
+            dxf_ok = True
+        except Exception as e:
+            logger.warning(f"No se pudo generar el DXF: {e}")
+
         JOBS[job_id]["status"] = "done"
         JOBS[job_id]["result"] = {
             "job_id":           job_id,
@@ -468,6 +489,7 @@ async def _run_job(job_id, csv_path, fases_path, params):
             "metal_info":       JOBS[job_id].get("metal_info"),
             "download_bloques": f"/api/download/{job_id}/bloques",
             "download_plan":    f"/api/download/{job_id}/plan",
+            "download_dxf":     f"/api/download/{job_id}/dxf" if dxf_ok else None,
         }
         await _broadcast(job_id, {"status": "done", "paso": 4, "total": 4, "mensaje": "Completado"})
 

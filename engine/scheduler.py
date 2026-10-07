@@ -173,26 +173,47 @@ class HeuristicaFaseBanco:
         res_rows     = []
         total_van    = 0.0
 
-        # Compuerta de apertura por avance: la fase N se abre cuando la fase N-1
-        # ya terminó `lag_fase` bancos (o toda la fase si tiene menos bancos).
+        # ── Plan CONSTANTE (observación del ingeniero) ─────────────────
+        # * Una fase que se abre NO se detiene: queda abierta hasta agotarse.
+        # * Tasa constante de mineral (cap_mineral_t) y de movimiento total
+        #   (meta = movimiento total / períodos estimados, tope cap_movimiento_t).
+        # * Si la(s) fase(s) abiertas no alcanzan para llenar la tasa, se abre la
+        #   siguiente (aunque no se cumpla el lag) en vez de dejar capacidad ociosa.
+        ton_arr   = paneles_df["ton_total"].values
+        ley_arr   = np.where(ton_arr > 0, paneles_df["metal_total"].values / np.maximum(ton_arr, 1e-9) * 100.0, 0.0)
+        ore_total = float(ton_arr[ley_arr >= lc_marginal].sum())
+        mov_total = float(ton_arr.sum())
+        t_est     = int(max(1.0, np.ceil(ore_total / max(cfg.cap_mineral_t, 1.0))))   # vida estimada del pit
+        meta_mov  = float(min(cfg.cap_movimiento_t, 1.02 * mov_total / t_est))
+        meta_mov  = max(meta_mov, float(cfg.cap_mineral_t))
+        logger.info(f"Plan constante: mineral {cfg.cap_mineral_t/1e6:.2f} Mt/período | movimiento meta {meta_mov/1e6:.2f} Mt/período | {t_est} períodos estimados")
+
+        fases_abiertas = {phases[0]}
         fase_prev = {f: (phases[i - 1] if i > 0 else None) for i, f in enumerate(phases)}
+        pendientes = {k: list(v) for k, v in panel_sequence.items()}
 
         def bancos_completados(fase) -> int:
             n = 0
             for pz in fase_bancos[fase]:
-                key = (fase, pz)
-                if panel_cursors.get(key, 0) >= len(panel_sequence.get(key, [])):
+                if not pendientes.get((fase, pz)):
                     n += 1
                 else:
                     break
             return n
 
-        def fase_abierta(fase) -> bool:
+        def fase_agotada(fase) -> bool:
+            return all(not pendientes.get((fase, pz)) for pz in fase_bancos[fase])
+
+        def puede_abrir(fase, relajado) -> bool:
             prev = fase_prev[fase]
             if prev is None:
                 return True
-            requeridos = min(cfg.lag_fase, len(fase_bancos[prev]))
-            return bancos_completados(prev) >= requeridos
+            if prev not in fases_abiertas:
+                return False
+            if fase_agotada(prev):
+                return True
+            req = 1 if relajado else min(cfg.lag_fase, len(fase_bancos[prev]))
+            return bancos_completados(prev) >= req
 
         # ─── BUCLE PRINCIPAL ───────────────────────────────────────────
         for t in range(1, cfg.horizontes + 1):
@@ -206,75 +227,81 @@ class HeuristicaFaseBanco:
             mined_details = []  # [(u, ton_econ, metal_econ, ton_marg, metal_marg)]
 
             remaining_ore   = float(cfg.cap_mineral_t)
-            remaining_mina  = float(cfg.cap_movimiento_t)
+            remaining_mina  = meta_mov
 
-            # Minar paneles por fase y banco
-            for fase in phases:
-                if not fase_abierta(fase):
-                    continue
+            def minar_fase(fase, forzar=False) -> int:
+                """Mina paneles de la fase mientras quepan en las tasas. Devuelve cuántos minó."""
+                nonlocal remaining_ore, remaining_mina, tons_ore_t, tons_waste_t
+                n_min = 0
                 for pz in fase_bancos[fase]:
-                    key = (fase, pz)
-                    if key not in panel_sequence:
+                    lista = pendientes.get((fase, pz))
+                    if not lista:
                         continue
-                    seq  = panel_sequence[key]
-                    cur  = panel_cursors.get(key, 0)
-
-                    while cur < len(seq):
-                        u = seq[cur]
+                    quedan = []
+                    for u in lista:
                         if mined_mask[u]:
-                            cur += 1
                             continue
-
-                        # Verificar precedencia vertical
+                        # precedencia vertical (banco superior de la misma fase)
                         if any(not mined_mask[p] for p in precedencias[u]):
-                            break
-
-                        row = paneles_df.iloc[u]
-                        ton_total = row["ton_total"]
-
+                            quedan.append(u)
+                            continue
+                        ton_total = float(ton_arr[u])
                         if ton_total <= 0:
                             mined_mask[u] = True
                             mined_period[u] = t
-                            cur += 1
                             continue
-
-                        # Clasificar con cutoff dinámico del período
-                        ley_bloque = row["metal_total"] / ton_total * 100.0 if ton_total > 0 else 0.0
-                        if ley_bloque >= lc_econ_t:
-                            ton_econ  = ton_total
-                            ton_marg  = 0.0
-                            ton_waste = 0.0
-                        elif ley_bloque >= lc_marginal:
-                            ton_econ  = 0.0
-                            ton_marg  = ton_total
-                            ton_waste = 0.0
+                        lb = float(ley_arr[u])
+                        if lb >= lc_econ_t:
+                            ton_econ, ton_marg, ton_waste = ton_total, 0.0, 0.0
+                        elif lb >= lc_marginal:
+                            ton_econ, ton_marg, ton_waste = 0.0, ton_total, 0.0
                         else:
-                            ton_econ  = 0.0
-                            ton_marg  = 0.0
-                            ton_waste = ton_total
-
+                            ton_econ, ton_marg, ton_waste = 0.0, 0.0, ton_total
                         ton_ore_panel = ton_econ + ton_marg
-
-                        # Verificar capacidades
-                        if remaining_ore < ton_ore_panel - 1.0:
-                            break
-                        if remaining_mina < ton_total - 1.0:
-                            break
-
-                        # Minar
-                        metal_econ = (row["metal_total"] * ton_econ / ton_total) if ton_total > 0 else 0.0
-                        metal_marg = (row["metal_total"] * ton_marg / ton_total) if ton_total > 0 else 0.0
-
+                        cabe = (remaining_ore >= ton_ore_panel - 1.0) and (remaining_mina >= ton_total - 1.0)
+                        if not cabe and not (forzar and n_min == 0 and not mined_details):
+                            quedan.append(u)
+                            continue
+                        mt = float(paneles_df["metal_total"].iat[u])
                         mined_mask[u]   = True
                         mined_period[u] = t
                         tons_ore_t   += ton_ore_panel
                         tons_waste_t += ton_waste
                         remaining_ore  -= ton_ore_panel
                         remaining_mina -= ton_total
-                        mined_details.append((u, ton_econ, metal_econ, ton_marg, metal_marg))
-                        cur += 1
+                        mined_details.append((u, ton_econ, mt * ton_econ / ton_total,
+                                              ton_marg, mt * ton_marg / ton_total))
+                        n_min += 1
+                    pendientes[(fase, pz)] = quedan
+                return n_min
 
-                    panel_cursors[key] = cur
+            # fases que cumplen el lag se abren; luego se minan en orden de prioridad
+            for f in phases:
+                if f not in fases_abiertas and puede_abrir(f, relajado=False):
+                    fases_abiertas.add(f)
+            extra_usado = False
+            for _ in range(2 * len(phases) + 2):
+                for f in phases:
+                    if f in fases_abiertas and not fase_agotada(f):
+                        minar_fase(f)
+                # falta mineral → permitir pre-stripping hasta el tope físico de movimiento
+                if remaining_ore > 0.03 * cfg.cap_mineral_t and not extra_usado and cfg.cap_movimiento_t > meta_mov:
+                    remaining_mina += cfg.cap_movimiento_t - meta_mov
+                    extra_usado = True
+                    continue
+                # ¿queda capacidad ociosa? → abrir la siguiente fase en vez de parar
+                falta = (remaining_ore > 0.03 * cfg.cap_mineral_t) or (remaining_mina > 0.03 * meta_mov)
+                if not falta:
+                    break
+                sig = next((f for f in phases if f not in fases_abiertas and puede_abrir(f, relajado=True)), None)
+                if sig is None:
+                    break
+                fases_abiertas.add(sig)
+            if not mined_details and not mined_mask.all():
+                # evita períodos vacíos: fuerza el primer panel elegible
+                for f in phases:
+                    if f in fases_abiertas and minar_fase(f, forzar=True):
+                        break
 
             # ─── PLANTA ────────────────────────────────────────────────
             metal_econ_t  = sum(d[2] for d in mined_details)
