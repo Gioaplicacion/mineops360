@@ -87,7 +87,7 @@ class ModeloBloques:
             "tonelaje_mineral_Mt": round(df_mineral["tonelaje"].sum() / 1e6, 2),
             "ley_promedio_pct": round(
                 (df_mineral["ley"] * df_mineral["tonelaje"]).sum()
-                / df_mineral["tonelaje"].sum() * 100
+                / df_mineral["tonelaje"].sum()
                 if len(df_mineral) > 0 else 0.0, 4
             ),
             "ley_corte_calculada_pct": round(self.config.economico.ley_de_corte, 4),

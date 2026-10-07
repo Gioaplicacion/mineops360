@@ -1168,7 +1168,7 @@ function ResultsDashboard({result,jobId}){
   return(
     <div style={{display:"flex",flexDirection:"column",gap:12}}>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-        {[["VAN Total","$"+van.toFixed(2)+" M","var(--ore)"],["Períodos",(result.plan_minero?.periodos||0)+" años","var(--acc)"],["Mineral",(res.tonelaje_mineral_Mt||0)+" Mt","var(--txt)"],["Ley media",((res.ley_promedio_pct||0)>10?((res.ley_promedio_pct||0)/100).toFixed(4):(res.ley_promedio_pct||0).toFixed(4))+"% Cu","var(--gold)"]].map(([l,v,c])=>(
+        {[["VAN Total","$"+van.toFixed(2)+" M","var(--ore)"],["Períodos",(result.plan_minero?.periodos||0)+" años","var(--acc)"],["Mineral",(res.tonelaje_mineral_Mt||0)+" Mt","var(--txt)"],["Ley media",(res.ley_promedio_pct||0).toFixed(4)+" "+(res.unidad_ley||"%")+" "+(res.metal||"Cu"),"var(--gold)"]].map(([l,v,c])=>(
           <div key={l} style={{background:"var(--card)",borderRadius:8,border:"1px solid var(--brd)",padding:"10px 12px"}}>
             <div style={{fontSize:18,fontWeight:600,color:c,lineHeight:1.1}}>{v}</div>
             <div style={{fontSize:10,color:"var(--txt2)",marginTop:3,textTransform:"uppercase",letterSpacing:".04em"}}>{l}</div>
