@@ -257,33 +257,60 @@ def _asistente_ia(mensaje: str, historial: list, ctx: dict) -> str:
     return "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text").strip()
 
 
-def _asistente_basico(mensaje: str, ctx: dict) -> str:
-    m = mensaje.lower()
+def _faq(ctx: dict) -> list:
+    """Preguntas frecuentes del programa: (palabras clave, respuesta). Sólo temas de Global Mine Planner."""
     rm = (ctx or {}).get("resumen_modelo") or {}
     rp = (ctx or {}).get("resumen_pits") or {}
     van = (ctx or {}).get("van_total_MUSD")
     metal = rm.get("metal", "Cu")
     ul, up = rm.get("unidad_ley", "%"), rm.get("unidad_precio", "USD/lb")
-    if any(k in m for k in ["van", "valor actual"]):
-        return (f"El VAN del plan es {van} MUSD (tasa de descuento del proyecto)." if van is not None
-                else "Aún no hay resultados: sube tu modelo en 'Proyecto' y pulsa Ejecutar pipeline.")
-    if any(k in m for k in ["ley de corte", "cutoff", "corte"]):
-        lc = rm.get("ley_corte_calculada_pct")
-        return (f"La ley de corte económica calculada es {lc} {ul} ({metal}). Sube con costos y baja con precio y recuperación."
-                if lc is not None else "La ley de corte = (costo mina + costo planta) / ((precio − TC/RC) × recuperación × factor de conversión).")
-    if any(k in m for k in ["pit", "óptimo", "optimo"]):
-        return (f"El pit óptimo es el nº {rp.get('pit_optimo')} (factor de ingresos {rp.get('rf_optimo')}); el plan usa los bloques hasta ese pit."
-                if rp.get("pit_optimo") else "El pit óptimo sale del análisis pit-by-pit: el que maximiza el VAN del caso especificado.")
-    if any(k in m for k in ["fase", "cono", "pushback"]):
-        return "Las fases son pushbacks: cada fase acumulada es un pit con paredes al talud global (45° por defecto), así que tiene forma de cono. Se ven en la pestaña '¿Cómo? Fases'."
-    if any(k in m for k in ["oro", "au", "onza", "oz", "precio", "unidad"]):
-        return f"Para {metal} la ley va en {ul} y el precio en {up}. Cobre: % y USD/lb. Oro/plata: g/t y USD/oz. Cambia el mineral en 'Mineral a evaluar' (pestaña Proyecto)."
-    if any(k in m for k in ["archivo", "csv", "columna", "formato", "east", "elev", "sg"]):
-        return "El archivo necesita coordenadas (X/EAST, Y/NORTH, Z/ELEV) y la ley del mineral (CU, AU, AG...). La densidad (SG) es opcional; si viene, cada bloque usa su densidad. Acepta CSV, TXT y ASC."
-    if any(k in m for k in ["periodo", "período", "año", "cuando", "cuándo"]):
-        return "En '¿Cuándo?' ves el Gantt por fase y la tabla de extracción por fase y año (Mt). La tasa de extracción es de mediana minería: 2,4 Mt/año de mineral y 7,5 Mt/año de movimiento total por defecto."
-    return ("Puedo ayudarte con: el VAN, la ley de corte, el pit óptimo, las fases, el plan por años, las unidades (Cu en USD/lb, Au en USD/oz) y el formato del archivo. "
-            "Para respuestas más completas hay que activar la IA del asistente (clave ANTHROPIC_API_KEY en Railway).")
+    sin = "Aún no hay resultados: sube tu modelo en 'Proyecto' y pulsa Ejecutar pipeline."
+    return [
+        (["formato", "archivo", "csv", "columna", "east", "north", "elev", "asc", "txt", "subir", "cargar"],
+         "El archivo necesita coordenadas (X/EAST, Y/NORTH, Z/ELEV) y la ley del mineral (CU, AU, AG, MO...). La densidad (SG) es opcional: si viene, cada bloque usa su densidad. Acepta CSV, TXT y ASC. El programa detecta las columnas solo y te muestra lo que encontró antes de ejecutar."),
+        (["tamano", "tamaño", "soporta", "limite", "límite", "maximo", "máximo", "bloques", "grande"],
+         "El motor trabaja con hasta 50.000 bloques: si tu modelo es más grande, toma 1 de cada N filas para mantener la forma del yacimiento. El visor muestra hasta 60.000 bloques."),
+        (["ley de corte", "cutoff", "corte"],
+         (f"La ley de corte calculada es {rm.get('ley_corte_calculada_pct')} {ul} ({metal}). " if rm.get("ley_corte_calculada_pct") is not None else "")
+         + "Se calcula como (costo mina + costo planta) / ((precio − TC/RC) × recuperación × factor de conversión). Sube con los costos y baja con el precio y la recuperación."),
+        (["van", "valor actual", "npv"],
+         (f"El VAN del plan es {van} MUSD, descontado con la tasa del proyecto. " if van is not None else sin + " ")
+         + "Es la suma de (ingresos − costos mina, planta, remanejo y stock) de cada período, descontados."),
+        (["pit optimo", "pit óptimo", "optimo", "óptimo", "lerchs", "grossmann", "pit-by-pit", "pit by pit", "cuanto", "cuánto", "factor de ingresos", "rf"],
+         (f"El pit óptimo es el nº {rp.get('pit_optimo')} (factor de ingresos {rp.get('rf_optimo')}). " if rp.get("pit_optimo") else "")
+         + "El módulo ¿Cuánto? calcula 25 pits anidados con Lerchs-Grossmann variando el precio (factor de ingresos). El óptimo es el que maximiza el VAN especificado; el plan usa los bloques hasta ese pit."),
+        (["fase", "cono", "pushback", "talud", "recocido", "como", "cómo"],
+         "El módulo ¿Cómo? divide el pit en fases (pushbacks) con recocido simulado. Cada fase acumulada es un pit con paredes al talud global (45° por defecto), por eso tiene forma de cono, y cada fase queda con al menos 12 % de los bloques."),
+        (["periodo", "período", "año", "plan", "cuando", "cuándo", "constante", "tasa", "capacidad", "gantt", "extraccion", "extracción", "tabla"],
+         "El módulo ¿Cuándo? programa fase por fase y banco por banco. Mantiene una tasa constante: 2,4 Mt/año de mineral y hasta 7,5 Mt/año de movimiento total por defecto (se cambian en Proyecto). Una fase que se abre no se detiene. Ves el Gantt y la tabla de extracción por fase y año (Mt)."),
+        (["unidad", "oro", "au", "onza", "oz", "cobre", "cu", "plata", "ag", "precio", "mineral a evaluar", "metal"],
+         f"Para {metal} la ley va en {ul} y el precio en {up}. Cobre/zinc/plomo/molibdeno: ley en % y precio en USD/lb. Oro/plata/platino: ley en g/t y precio en USD/oz (1 oz = 31,1035 g). Cambia el mineral en 'Mineral a evaluar' (pestaña Proyecto)."),
+        (["dxf", "descargar", "exportar", "autocad", "vulcan", "datamine", "surpac"],
+         "Al terminar, el botón 'Descargar DXF' entrega sólidos de cada fase (FASE_n), sólidos de cada período (PERIODO_nn) y la superficie del pit final (SUPERFICIE_PIT_FINAL), cada uno en su capa. También puedes bajar el plan y los bloques en CSV."),
+        (["filtro", "filtrar", "modelo", "paralelepipedo", "paralelepípedo", "color", "visor", "3d", "ver"],
+         "En la pestaña Modelo ves todo el yacimiento como paralelepípedo con colores por ley. Puedes elegir el mineral y filtrar por rango de ley (mín/máx) para ver sólo los bloques que te interesan."),
+        (["densidad", "sg", "tonelaje"],
+         "Si tu archivo trae densidad (SG/DENS), cada bloque usa su propia densidad para calcular el tonelaje. Si no, se usa la densidad del proyecto (2,5 t/m³ por defecto)."),
+        (["recuperacion", "recuperación", "costo", "costos", "tc", "rc", "parametro", "parámetro", "economic"],
+         "Los parámetros económicos (precio, TC/RC, recuperación, costo mina y planta, tasa de descuento) se ingresan en la pestaña Proyecto antes de ejecutar. Cambiarlos modifica la ley de corte, el pit óptimo y el VAN."),
+        (["ejecutar", "pipeline", "demora", "tarda", "tiempo", "error", "falla"],
+         "Pulsa 'Ejecutar pipeline' en Proyecto. Corre 4 pasos: carga del modelo, optimización del pit, faseamiento y plan. Con 50.000 bloques puede tardar varios minutos. Si hay error, revisa que el archivo tenga coordenadas y una columna de ley del mineral elegido."),
+    ]
+
+
+_FUERA_DE_TEMA = ("Sólo puedo ayudarte con Global Mine Planner. Pregúntame por: el formato del archivo, la ley de corte, el pit óptimo, "
+                  "las fases, el plan por años, el VAN, las unidades (Cu/Au), el filtro del modelo o la descarga DXF.")
+
+
+def _asistente_basico(mensaje: str, ctx: dict) -> str:
+    """Preguntas frecuentes (sin IA, sin costo): elige el tema con más coincidencias de palabras clave."""
+    m = " " + mensaje.lower() + " "
+    mejor, puntos = None, 0
+    for claves, resp in _faq(ctx):
+        p = sum(len(k) for k in claves if (" " + k + " ") in m or (len(k) > 3 and k in m))
+        if p > puntos:
+            mejor, puntos = resp, p
+    return mejor if mejor else _FUERA_DE_TEMA
 
 
 @app.post("/api/asistente")
@@ -294,7 +321,7 @@ async def asistente(payload: dict):
     ctx = payload.get("contexto") or {}
     historial = payload.get("historial") or []
     loop = asyncio.get_event_loop()
-    if os.getenv("ANTHROPIC_API_KEY", "").strip():
+    if os.getenv("ANTHROPIC_API_KEY", "").strip() and os.getenv("ASISTENTE_IA", "") == "1":
         try:
             texto = await loop.run_in_executor(None, _asistente_ia, mensaje, historial, ctx)
             if texto:
