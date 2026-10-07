@@ -9,6 +9,25 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 
+# Unidades por mineral: (unidad de ley, unidad de precio, factor "lbs_por_ton" del motor).
+# El motor calcula ingreso = precio * (ley/100) * lbs_por_ton * recuperación * ton.
+#  - Cu, Zn, Mo...: ley en %, precio en USD/lb  -> 2204.6 lb por tonelada
+#  - Au, Ag, Pt...: ley en g/t, precio en USD/oz -> 100/31.1035 (1 oz troy = 31.1035 g)
+GRAMOS_POR_ONZA = 31.1035
+METALES_ECO = {
+    "cu": ("%",   "USD/lb", 2204.6),
+    "zn": ("%",   "USD/lb", 2204.6),
+    "pb": ("%",   "USD/lb", 2204.6),
+    "mo": ("%",   "USD/lb", 2204.6),
+    "ni": ("%",   "USD/lb", 2204.6),
+    "co": ("%",   "USD/lb", 2204.6),
+    "au": ("g/t", "USD/oz", 100.0 / GRAMOS_POR_ONZA),
+    "ag": ("g/t", "USD/oz", 100.0 / GRAMOS_POR_ONZA),
+    "pt": ("g/t", "USD/oz", 100.0 / GRAMOS_POR_ONZA),
+    "pd": ("g/t", "USD/oz", 100.0 / GRAMOS_POR_ONZA),
+}
+
+
 @dataclass
 class BlockModelConfig:
     """Geometría del modelo de bloques."""
@@ -36,7 +55,9 @@ class EconomicConfig:
     costo_mina: float = 2.0      # USD/t minada
     costo_planta: float = 10.0   # USD/t procesada
     tasa_descuento: float = 0.10 # tasa anual (10%)
-    lbs_por_ton: float = 2204.6  # conversión tonelada → libras
+    lbs_por_ton: float = 2204.6  # conversión tonelada → libras (Cu); para Au/Ag = 100/31.1035
+    unidad_ley: str = "%"        # unidad de la ley del metal evaluado
+    unidad_precio: str = "USD/lb" # unidad del precio del metal
 
     @property
     def recuperacion_dec(self) -> float:
@@ -111,7 +132,11 @@ class ProjectConfig:
         """Construye la config desde un dict (p.ej. JSON de la API)."""
         cfg = cls()
         cfg.nombre = d.get("nombre", cfg.nombre)
-        cfg.metal  = d.get("metal", cfg.metal)
+        cfg.metal  = str(d.get("metal", cfg.metal)).lower()
+        ul, up, fac = METALES_ECO.get(cfg.metal, METALES_ECO["cu"])
+        cfg.economico.unidad_ley = ul
+        cfg.economico.unidad_precio = up
+        cfg.economico.lbs_por_ton = fac
 
         b = d.get("bloque", {})
         cfg.bloque.xsiz      = float(b.get("xsiz", cfg.bloque.xsiz))

@@ -22,7 +22,7 @@ from fastapi.responses import FileResponse
 
 import sys
 sys.path.append(str(Path(__file__).parent))
-from engine.config import ProjectConfig
+from engine.config import ProjectConfig, METALES_ECO
 from engine.pipeline import MineOpsPipeline, PipelineResult
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -63,6 +63,7 @@ COLUMN_MAP = {
     "tonnes":    "tonelaje",
     "ton":       "tonelaje",
     "sg":        "dens",
+    "densidad":  "dens",
     "density":   "dens",
     "class":     "fase",
     "roca":      "tipo_roca",
@@ -86,7 +87,7 @@ METALES_RECONOCIDOS = {
     "ley":   {"simbolo": "Cu", "nombre": "Cobre",     "unidad": "%"},
 }
 
-def convertir_asc_a_csv(contenido_bytes: bytes, filename: str) -> bytes:
+def convertir_asc_a_csv(contenido_bytes: bytes, filename: str, metal_pref: Optional[str] = None):
     """
     Convierte un archivo .asc (separado por espacios) a CSV estándar.
     También maneja archivos CSV con columnas de nombres alternativos.
@@ -133,26 +134,49 @@ def convertir_asc_a_csv(contenido_bytes: bytes, filename: str) -> bytes:
     if faltantes:
         raise ValueError(f"Columnas requeridas no encontradas: {faltantes}. Columnas disponibles: {list(df.columns)}")
 
-    # Detectar metal automáticamente desde los nombres de columna
+    # Detectar los minerales que trae el archivo (Cu, Au, Ag...) y elegir cuál se evalúa
+    candidatos = []
+    for col in df.columns:
+        cl = col.lower().strip()
+        if cl in METALES_RECONOCIDOS and cl not in ("grade", "ley"):
+            candidatos.append((cl, col))
+    genericas = [(c.lower().strip(), c) for c in df.columns if c.lower().strip() in ("grade", "ley")]
     metal_detectado = None
     col_metal_original = None
-    for col in df.columns:
-        col_lower = col.lower().strip()
-        if col_lower in METALES_RECONOCIDOS:
-            metal_detectado = METALES_RECONOCIDOS[col_lower]
-            col_metal_original = col
-            break
+    pref = (metal_pref or "").lower().strip()
+    if candidatos:
+        elegido = None
+        if pref:
+            for cl, col in candidatos:
+                if METALES_RECONOCIDOS[cl]["simbolo"].lower() == pref:
+                    elegido = (cl, col)
+                    break
+            if elegido is None and not genericas:
+                disp = ", ".join(sorted({METALES_RECONOCIDOS[cl]["simbolo"] for cl, _ in candidatos}))
+                raise ValueError(
+                    f"El archivo no trae una columna del mineral seleccionado ({pref.upper()}). "
+                    f"Minerales disponibles en el archivo: {disp}."
+                )
+        if elegido is None:
+            elegido = candidatos[0]
+        metal_detectado = dict(METALES_RECONOCIDOS[elegido[0]])
+        col_metal_original = elegido[1]
+    elif genericas:
+        metal_detectado = dict(METALES_RECONOCIDOS[genericas[0][0]])
+        col_metal_original = genericas[0][1]
+    if metal_detectado is not None:
+        metal_detectado["disponibles"] = sorted({METALES_RECONOCIDOS[cl]["simbolo"] for cl, _ in candidatos})
+        _ul, _up, _f = METALES_ECO.get(metal_detectado["simbolo"].lower(), METALES_ECO["cu"])
+        metal_detectado["unidad"] = _ul
+        metal_detectado["unidad_precio"] = _up
 
     # Renombrar columna del metal a "ley" (nombre genérico para el pipeline)
     if col_metal_original and col_metal_original in df.columns:
         df = df.rename(columns={col_metal_original: "ley"})
         logger.info(f"Metal detectado: {metal_detectado['nombre']} ({metal_detectado['simbolo']}) en columna '{col_metal_original}'")
-    elif "Cu" in df.columns:
-        df = df.rename(columns={"Cu": "ley"})
-        metal_detectado = METALES_RECONOCIDOS["cu"]
     elif "ley" not in df.columns:
         df["ley"] = 0.0
-        metal_detectado = {"simbolo": "Cu", "nombre": "Cobre", "unidad": "%"}
+        metal_detectado = {"simbolo": "Cu", "nombre": "Cobre", "unidad": "%", "unidad_precio": "USD/lb", "disponibles": []}
         logger.warning("No se encontró columna de ley, usando ley=0")
 
     # Subsamplear si es muy grande (más de 50,000 bloques)
@@ -175,6 +199,109 @@ def convertir_asc_a_csv(contenido_bytes: bytes, filename: str) -> bytes:
     # Retornar CSV + metadato del metal detectado
     csv_bytes = df_out.to_csv(index=False).encode("utf-8")
     return csv_bytes, metal_detectado
+
+
+# ── Asistente virtual ─────────────────────────────────────────────────────
+# Con la variable ANTHROPIC_API_KEY (Railway → Variables) responde con IA, usando los resultados del proyecto.
+# Sin clave responde en modo básico (reglas simples) para que el panel siempre funcione.
+ASISTENTE_MODELO = os.getenv("ASISTENTE_MODELO", "claude-sonnet-5-5")
+ASISTENTE_SISTEMA = """Eres el asistente virtual de Global Mine Planner, una aplicación de planificación minera a cielo abierto.
+Hablas en español de Chile, claro y directo, para un usuario de minería que no es programador.
+Conoces los módulos: Modelo (modelo de bloques como paralelepípedo, filtro por mineral y ley), ¿Cuánto? (reservas y pit óptimo por \
+análisis pit-by-pit con Lerchs-Grossmann y factores de ingresos), ¿Cómo? Fases (pushbacks en forma de cono, talud global, \
+recocido simulado) y ¿Cuándo? (plan por años con tasa de mediana minería, tabla de extracción por fase y año, VAN).
+Unidades: cobre con ley en % y precio en USD/lb; oro y plata con ley en g/t y precio en USD/oz (1 oz troy = 31,1035 g).
+Reglas: usa SOLO los números del contexto entregado y nunca inventes cifras; si falta un dato, dilo y explica dónde sacarlo en la app. \
+No des asesoría financiera ni de inversión; explica el método y los supuestos. Respuestas breves (máximo ~8 líneas), con pasos \
+numerados cuando el usuario pregunte cómo hacer algo."""
+
+
+def _contexto_texto(ctx: dict) -> str:
+    try:
+        return json.dumps(ctx, ensure_ascii=False)[:6000]
+    except Exception:
+        return "{}"
+
+
+def _asistente_ia(mensaje: str, historial: list, ctx: dict) -> str:
+    import urllib.request
+    key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    msgs = []
+    for h in (historial or [])[-8:]:
+        rol = "assistant" if h.get("rol") == "asistente" else "user"
+        texto = str(h.get("texto", ""))[:2000]
+        if texto:
+            msgs.append({"role": rol, "content": texto})
+    msgs.append({"role": "user", "content": mensaje[:2000]})
+    # La API exige que el primer mensaje sea del usuario y que se alternen
+    while msgs and msgs[0]["role"] != "user":
+        msgs.pop(0)
+    limpio = []
+    for m in msgs:
+        if limpio and limpio[-1]["role"] == m["role"]:
+            limpio[-1]["content"] += "\n" + m["content"]
+        else:
+            limpio.append(m)
+    body = json.dumps({
+        "model": ASISTENTE_MODELO,
+        "max_tokens": 700,
+        "system": ASISTENTE_SISTEMA + "\n\nContexto actual del proyecto (JSON): " + _contexto_texto(ctx),
+        "messages": limpio,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.anthropic.com/v1/messages", data=body, method="POST",
+        headers={"content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01"},
+    )
+    with urllib.request.urlopen(req, timeout=40) as r:
+        data = json.loads(r.read().decode("utf-8"))
+    return "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text").strip()
+
+
+def _asistente_basico(mensaje: str, ctx: dict) -> str:
+    m = mensaje.lower()
+    rm = (ctx or {}).get("resumen_modelo") or {}
+    rp = (ctx or {}).get("resumen_pits") or {}
+    van = (ctx or {}).get("van_total_MUSD")
+    metal = rm.get("metal", "Cu")
+    ul, up = rm.get("unidad_ley", "%"), rm.get("unidad_precio", "USD/lb")
+    if any(k in m for k in ["van", "valor actual"]):
+        return (f"El VAN del plan es {van} MUSD (tasa de descuento del proyecto)." if van is not None
+                else "Aún no hay resultados: sube tu modelo en 'Proyecto' y pulsa Ejecutar pipeline.")
+    if any(k in m for k in ["ley de corte", "cutoff", "corte"]):
+        lc = rm.get("ley_corte_calculada_pct")
+        return (f"La ley de corte económica calculada es {lc} {ul} ({metal}). Sube con costos y baja con precio y recuperación."
+                if lc is not None else "La ley de corte = (costo mina + costo planta) / ((precio − TC/RC) × recuperación × factor de conversión).")
+    if any(k in m for k in ["pit", "óptimo", "optimo"]):
+        return (f"El pit óptimo es el nº {rp.get('pit_optimo')} (factor de ingresos {rp.get('rf_optimo')}); el plan usa los bloques hasta ese pit."
+                if rp.get("pit_optimo") else "El pit óptimo sale del análisis pit-by-pit: el que maximiza el VAN del caso especificado.")
+    if any(k in m for k in ["fase", "cono", "pushback"]):
+        return "Las fases son pushbacks: cada fase acumulada es un pit con paredes al talud global (45° por defecto), así que tiene forma de cono. Se ven en la pestaña '¿Cómo? Fases'."
+    if any(k in m for k in ["oro", "au", "onza", "oz", "precio", "unidad"]):
+        return f"Para {metal} la ley va en {ul} y el precio en {up}. Cobre: % y USD/lb. Oro/plata: g/t y USD/oz. Cambia el mineral en 'Mineral a evaluar' (pestaña Proyecto)."
+    if any(k in m for k in ["archivo", "csv", "columna", "formato", "east", "elev", "sg"]):
+        return "El archivo necesita coordenadas (X/EAST, Y/NORTH, Z/ELEV) y la ley del mineral (CU, AU, AG...). La densidad (SG) es opcional; si viene, cada bloque usa su densidad. Acepta CSV, TXT y ASC."
+    if any(k in m for k in ["periodo", "período", "año", "cuando", "cuándo"]):
+        return "En '¿Cuándo?' ves el Gantt por fase y la tabla de extracción por fase y año (Mt). La tasa de extracción es de mediana minería: 2,4 Mt/año de mineral y 7,5 Mt/año de movimiento total por defecto."
+    return ("Puedo ayudarte con: el VAN, la ley de corte, el pit óptimo, las fases, el plan por años, las unidades (Cu en USD/lb, Au en USD/oz) y el formato del archivo. "
+            "Para respuestas más completas hay que activar la IA del asistente (clave ANTHROPIC_API_KEY en Railway).")
+
+
+@app.post("/api/asistente")
+async def asistente(payload: dict):
+    mensaje = str(payload.get("mensaje", "")).strip()
+    if not mensaje:
+        raise HTTPException(status_code=400, detail="Mensaje vacío")
+    ctx = payload.get("contexto") or {}
+    historial = payload.get("historial") or []
+    loop = asyncio.get_event_loop()
+    if os.getenv("ANTHROPIC_API_KEY", "").strip():
+        try:
+            texto = await loop.run_in_executor(None, _asistente_ia, mensaje, historial, ctx)
+            if texto:
+                return {"respuesta": texto, "modo": "ia"}
+        except Exception as e:
+            logger.warning(f"Asistente IA falló, uso modo básico: {e}")
+    return {"respuesta": _asistente_basico(mensaje, ctx), "modo": "basico"}
 
 
 @app.get("/")
@@ -207,14 +334,18 @@ async def run_pipeline(
         for col in ["east", "north", "elev", "au_gt", "tones", "tonnes", "info"]
     )
 
-    metal_info = None
-    if extension == ".asc" or tiene_columnas_alternativas:
-        logger.info(f"Convirtiendo archivo {filename} a CSV estándar...")
-        try:
-            contenido, metal_info = convertir_asc_a_csv(contenido, filename)
-            logger.info(f"Conversión exitosa - Metal: {metal_info}")
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
+    try:
+        params_pre = json.loads(params_json)
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=400, detail=f"params_json inválido: {e}")
+
+    # Siempre se normaliza el archivo: EAST/NORTH/ELEV, AU/CU/AG..., SG (densidad), info...
+    logger.info(f"Normalizando archivo {filename}...")
+    try:
+        contenido, metal_info = convertir_asc_a_csv(contenido, filename, params_pre.get("metal"))
+        logger.info(f"Conversión exitosa - Metal: {metal_info}")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     csv_path = UPLOAD_DIR / f"{job_id}_modelo.csv"
     csv_path.write_bytes(contenido)
@@ -224,10 +355,10 @@ async def run_pipeline(
         fases_path = UPLOAD_DIR / f"{job_id}_fases.csv"
         fases_path.write_bytes(await fases_csv.read())
 
-    try:
-        params = json.loads(params_json)
-    except json.JSONDecodeError as e:
-        raise HTTPException(status_code=400, detail=f"params_json inválido: {e}")
+    params = params_pre
+    if metal_info:
+        # El mineral evaluado es el de la columna elegida: define unidad de ley y de precio
+        params["metal"] = metal_info["simbolo"].lower()
 
     JOBS[job_id] = {
         "status":   "queued",

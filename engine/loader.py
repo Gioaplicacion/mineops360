@@ -27,8 +27,13 @@ ALIAS_MAP = {
     "x":  ["x", "east", "este", "x(m)", "x(ft)", "xcoord"],
     "y":  ["y", "north", "norte", "y(m)", "y(ft)", "ycoord"],
     "z":  ["z", "elev", "elevation", "z(m)", "z(ft)", "zcoord", "cota"],
-    "ley": ["cu", "au", "ag", "ley", "grade", "tenor", "au(oz/ton)", "cut"],
+    "ley": ["cu", "au", "ag", "mo", "zn", "pb", "ni", "co", "pt", "pd",
+            "cu_pct", "au_gt", "ag_gt", "ley", "grade", "tenor", "au(oz/ton)", "cut"],
+    "dens": ["dens", "sg", "density", "densidad", "dens_t_m3", "rho"],
 }
+
+# Columnas de ley reconocidas (para avisar cuando el archivo trae otro mineral)
+COLUMNAS_LEY = {"cu", "au", "ag", "mo", "zn", "pb", "ni", "co", "pt", "pd", "cu_pct", "au_gt", "ag_gt"}
 
 
 class ModeloBloques:
@@ -86,6 +91,10 @@ class ModeloBloques:
                 if len(df_mineral) > 0 else 0.0, 4
             ),
             "ley_corte_calculada_pct": round(self.config.economico.ley_de_corte, 4),
+            "metal":            self.config.metal.upper(),
+            "unidad_ley":       self.config.economico.unidad_ley,
+            "unidad_precio":    self.config.economico.unidad_precio,
+            "densidad_por_bloque": bool("dens" in df.columns),
             "x_range": [float(df["x"].min()), float(df["x"].max())],
             "y_range": [float(df["y"].min()), float(df["y"].max())],
             "z_range": [float(df["z"].min()), float(df["z"].max())],
@@ -171,7 +180,20 @@ def cargar_modelo(
     ysiz = _inferir_paso(df["y"])
     zsiz = _inferir_paso(df["z"])
     ton_bloque = xsiz * ysiz * zsiz * config.bloque.densidad
-    df["tonelaje"] = ton_bloque
+    if "dens" in df.columns:
+        # Densidad por bloque (SG, t/m³): tonelaje real de cada bloque
+        dens = pd.to_numeric(df["dens"], errors="coerce")
+        validas = dens.between(0.5, 10.0)
+        n_inval = int((~validas).sum())
+        if n_inval:
+            logger.warning(f"  {n_inval:,} bloques con densidad inválida → se usa {config.bloque.densidad} t/m³")
+        dens = dens.where(validas, config.bloque.densidad)
+        df["dens"] = dens
+        df["tonelaje"] = xsiz * ysiz * zsiz * dens
+        ton_bloque = float(df["tonelaje"].mean())
+        logger.info(f"  Densidad por bloque: media {dens.mean():.3f} t/m³ (rango {dens.min():.2f}–{dens.max():.2f})")
+    else:
+        df["tonelaje"] = ton_bloque
 
     logger.info(f"  Tamaño bloque inferido: {xsiz}×{ysiz}×{zsiz} m → {ton_bloque:,.0f} t/bloque")
 
@@ -185,7 +207,7 @@ def cargar_modelo(
     )
 
     # --- 7. Valorización económica por bloque ---
-    df["value"] = _calcular_value(df["ley"].values, config, ton_bloque)
+    df["value"] = _calcular_value(df["ley"].values, config, df["tonelaje"].values)
 
     modelo = ModeloBloques(df, config)
     logger.info(f"  ✅ Modelo cargado: {modelo.resumen}")
@@ -204,6 +226,14 @@ def _renombrar_columnas(df: pd.DataFrame, ley_var: str) -> pd.DataFrame:
         # Para la ley, el alias principal es el metal del proyecto
         if canon == "ley":
             candidatos = [ley_var.lower()] + aliases
+            if ley_var.lower() in COLUMNAS_LEY and ley_var.lower() not in cols and "ley" not in cols:
+                otras = sorted(c for c in cols if c in COLUMNAS_LEY)
+                if otras:
+                    raise ValueError(
+                        f"El proyecto está configurado para evaluar {ley_var.upper()}, pero el archivo "
+                        f"no trae esa columna. Trae: {', '.join(o.upper() for o in otras)}. "
+                        f"Elige ese mineral (con su precio y unidad) o corrige el archivo."
+                    )
         else:
             candidatos = aliases
 

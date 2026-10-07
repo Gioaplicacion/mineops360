@@ -56,6 +56,7 @@ class ResultadoPitOptimizer:
             "pit_optimo": None if self.pit_optimo is None else int(self.pit_optimo),
             "rf_optimo": rf_opt,
             "precio_base_USD_lb": float(self.config.economico.precio_metal),
+            "precio_unidad": self.config.economico.unidad_precio,
             "pits": self.tabla.to_dict(orient="records"),
         }
 
@@ -163,7 +164,7 @@ def optimizar_pits(
     # Coordenadas y grilla
     xmn, ymn, zmn = df["x"].min(), df["y"].min(), df["z"].min()
     xsiz, ysiz, zsiz = modelo.xsiz, modelo.ysiz, modelo.zsiz
-    ton = modelo.ton_bloque
+    ton = df["tonelaje"].values  # tonelaje por bloque (usa SG si el archivo lo trae)
 
     # Escenarios de precio: factor de ingresos (RF) de rf_min a rf_max; RF=1 es el precio del proyecto
     precio_base = cfg.economico.precio_metal
