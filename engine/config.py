@@ -113,7 +113,20 @@ class SchedulerConfig:
     cap_planta_t: float = 2_200_000.0      # capacidad planta (t/año)
     costo_remanejo: float = 0.60   # USD/t remanejo stockpile
     costo_holding: float = 0.05    # USD/t·período inventario
+    dias_efectivos: float = 365.0  # días operacionales efectivos por período
+    # Capacidades alternativas en t/día (si > 0 reemplazan a las anuales: t/día × días efectivos)
+    cap_mineral_tpd: float = 0.0
+    cap_movimiento_tpd: float = 0.0
+    cap_planta_tpd: float = 0.0
+    precedencia_espacial: bool = True  # exige vecinos 3×3 del banco superior (talud) además de la columna
+    cap_stock_t: float = 0.0       # capacidad máx. de inventario en stockpile (0 = sin límite)
+    cap_recup_stock_t: float = 0.0 # máx. recuperación desde stockpile por período (0 = sin límite)
     usar_lane: bool = False         # activa cutoff dinámico Lane
+
+    def cap_anual(self, nombre: str) -> float:
+        """Capacidad anual efectiva: t/día × días efectivos si se dio en t/día; si no, la anual."""
+        tpd = getattr(self, f"cap_{nombre}_tpd", 0.0)
+        return tpd * self.dias_efectivos if tpd > 0 else getattr(self, f"cap_{nombre}_t")
     lane_cutoffs: dict = field(default_factory=dict)  # {periodo: cutoff%}
 
 
@@ -164,6 +177,9 @@ class ProjectConfig:
         cfg.scheduler.cap_mineral_t    = float(s.get("cap_mineral_t", cfg.scheduler.cap_mineral_t))
         cfg.scheduler.cap_movimiento_t = float(s.get("cap_movimiento_t", cfg.scheduler.cap_movimiento_t))
         cfg.scheduler.cap_planta_t     = float(s.get("cap_planta_t", cfg.scheduler.cap_planta_t))
+        for k in ("dias_efectivos", "cap_mineral_tpd", "cap_movimiento_tpd", "cap_planta_tpd",
+                  "cap_stock_t", "cap_recup_stock_t"):
+            setattr(cfg.scheduler, k, float(s.get(k, getattr(cfg.scheduler, k))))
         cfg.scheduler.usar_lane        = bool(s.get("usar_lane", cfg.scheduler.usar_lane))
 
         return cfg

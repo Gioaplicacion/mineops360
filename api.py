@@ -505,6 +505,14 @@ async def _run_job(job_id, csv_path, fases_path, params):
         except Exception as e:
             logger.warning(f"No se pudo generar el DXF: {e}")
 
+        try:
+            from engine.reconciliacion import reconciliar
+            recon = reconciliar(ProjectConfig.desde_dict(params), resultado.bloques_df, resultado.plan_df,
+                                resultado.van_total_MUSD * 1e6, resultado.resumen_pits, resultado.resumen_modelo)
+        except Exception as e:
+            logger.warning(f"Reconciliación no disponible: {e}")
+            recon = []
+
         JOBS[job_id]["status"] = "done"
         JOBS[job_id]["result"] = {
             "job_id":           job_id,
@@ -513,6 +521,7 @@ async def _run_job(job_id, csv_path, fases_path, params):
             "resumen_modelo":   resultado.resumen_modelo,
             "resumen_pits":     resultado.resumen_pits,
             "plan_minero":      resultado.plan_minero,
+            "reconciliacion":   recon,
             "metal_info":       JOBS[job_id].get("metal_info"),
             "download_bloques": f"/api/download/{job_id}/bloques",
             "download_plan":    f"/api/download/{job_id}/plan",

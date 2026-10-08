@@ -63,7 +63,10 @@ class ResultadoScheduler:
     """Contiene el plan minero período a período y el modelo de bloques schedulado."""
 
     def __init__(self, plan_df: pd.DataFrame, bloques_df: pd.DataFrame,
-                 van_total: float, config: ProjectConfig):
+                 van_total: float, config: ProjectConfig,
+                 fase_periodo: Optional[pd.DataFrame] = None, interrupciones: Optional[list] = None):
+        self.fase_periodo = fase_periodo if fase_periodo is not None else pd.DataFrame()
+        self.interrupciones = interrupciones or []
         self.plan     = plan_df      # un row por período
         self.bloques  = bloques_df   # modelo de bloques con columna 'periodo'
         self.van_total = van_total
@@ -75,6 +78,9 @@ class ResultadoScheduler:
             "van_total_MUSD":  round(self.van_total / 1e6, 4),
             "periodos":        len(self.plan),
             "plan":            self.plan.to_dict(orient="records"),
+            "unidad_metal":    "t" if self.config.economico.unidad_ley == "%" else "oz",
+            "fase_periodo":    self.fase_periodo.round(4).to_dict(orient="records"),
+            "interrupciones":  self.interrupciones[:300],
         }
 
 
@@ -121,6 +127,11 @@ class HeuristicaFaseBanco:
         t0 = time.time()
         cfg = self.sch
         df  = self.fases_df
+        cap_ore = float(cfg.cap_anual('mineral'))
+        cap_mov = float(cfg.cap_anual('movimiento'))
+        cap_pl  = float(cfg.cap_anual('planta'))
+        cap_stock = float(cfg.cap_stock_t) if cfg.cap_stock_t > 0 else float('inf')
+        cap_recup = float(cfg.cap_recup_stock_t) if cfg.cap_recup_stock_t > 0 else float('inf')
 
         # Validar columnas
         for col in ["X", "Y", "Z", "fase", "Ley", "tonelaje"]:
@@ -168,6 +179,8 @@ class HeuristicaFaseBanco:
         # Estado de la simulación
         mined_mask   = np.zeros(nU, dtype=bool)
         mined_period = np.zeros(nU, dtype=int)
+        fase_per_rows = []
+        interrupciones = []
         sp_marginal  = Stockpile()
         sp_economic  = Stockpile()
         res_rows     = []
@@ -180,13 +193,14 @@ class HeuristicaFaseBanco:
         # * Si la(s) fase(s) abiertas no alcanzan para llenar la tasa, se abre la
         #   siguiente (aunque no se cumpla el lag) en vez de dejar capacidad ociosa.
         ton_arr   = paneles_df["ton_total"].values
+        fase_arr  = paneles_df["fase"].values
         ley_arr   = np.where(ton_arr > 0, paneles_df["metal_total"].values / np.maximum(ton_arr, 1e-9) * 100.0, 0.0)
         ore_total = float(ton_arr[ley_arr >= lc_marginal].sum())
         mov_total = float(ton_arr.sum())
-        t_est     = int(max(1.0, np.ceil(ore_total / max(cfg.cap_mineral_t, 1.0))))   # vida estimada del pit
-        meta_mov  = float(min(cfg.cap_movimiento_t, 1.02 * mov_total / t_est))
-        meta_mov  = max(meta_mov, float(cfg.cap_mineral_t))
-        logger.info(f"Plan constante: mineral {cfg.cap_mineral_t/1e6:.2f} Mt/período | movimiento meta {meta_mov/1e6:.2f} Mt/período | {t_est} períodos estimados")
+        t_est     = int(max(1.0, np.ceil(ore_total / max(cap_ore, 1.0))))   # vida estimada del pit
+        meta_mov  = float(min(cap_mov, 1.02 * mov_total / t_est))
+        meta_mov  = max(meta_mov, float(cap_ore))
+        logger.info(f"Plan constante: mineral {cap_ore/1e6:.2f} Mt/período | movimiento meta {meta_mov/1e6:.2f} Mt/período | {t_est} períodos estimados")
 
         fases_abiertas = {phases[0]}
         fase_prev = {f: (phases[i - 1] if i > 0 else None) for i, f in enumerate(phases)}
@@ -226,8 +240,10 @@ class HeuristicaFaseBanco:
             tons_waste_t = 0.0
             mined_details = []  # [(u, ton_econ, metal_econ, ton_marg, metal_marg)]
 
-            remaining_ore   = float(cfg.cap_mineral_t)
+            remaining_ore   = float(cap_ore)
             remaining_mina  = meta_mov
+            inv_ini = sp_marginal.get_inventory()[0] + sp_economic.get_inventory()[0]
+            ore_room = cap_pl + max(0.0, cap_stock - inv_ini)   # alimentación directa + espacio libre en stock
 
             def minar_fase(fase, forzar=False) -> int:
                 """Mina paneles de la fase mientras quepan en las tasas. Devuelve cuántos minó."""
@@ -258,7 +274,8 @@ class HeuristicaFaseBanco:
                         else:
                             ton_econ, ton_marg, ton_waste = 0.0, 0.0, ton_total
                         ton_ore_panel = ton_econ + ton_marg
-                        cabe = (remaining_ore >= ton_ore_panel - 1.0) and (remaining_mina >= ton_total - 1.0)
+                        cabe = (remaining_ore >= ton_ore_panel - 1.0) and (remaining_mina >= ton_total - 1.0) \
+                               and (tons_ore_t + ton_ore_panel <= ore_room + 1.0)
                         if not cabe and not (forzar and n_min == 0 and not mined_details):
                             quedan.append(u)
                             continue
@@ -285,12 +302,12 @@ class HeuristicaFaseBanco:
                     if f in fases_abiertas and not fase_agotada(f):
                         minar_fase(f)
                 # falta mineral → permitir pre-stripping hasta el tope físico de movimiento
-                if remaining_ore > 0.03 * cfg.cap_mineral_t and not extra_usado and cfg.cap_movimiento_t > meta_mov:
-                    remaining_mina += cfg.cap_movimiento_t - meta_mov
+                if remaining_ore > 0.03 * cap_ore and not extra_usado and cap_mov > meta_mov:
+                    remaining_mina += cap_mov - meta_mov
                     extra_usado = True
                     continue
                 # ¿queda capacidad ociosa? → abrir la siguiente fase en vez de parar
-                falta = (remaining_ore > 0.03 * cfg.cap_mineral_t) or (remaining_mina > 0.03 * meta_mov)
+                falta = (remaining_ore > 0.03 * cap_ore) or (remaining_mina > 0.03 * meta_mov)
                 if not falta:
                     break
                 sig = next((f for f in phases if f not in fases_abiertas and puede_abrir(f, relajado=True)), None)
@@ -303,40 +320,38 @@ class HeuristicaFaseBanco:
                     if f in fases_abiertas and minar_fase(f, forzar=True):
                         break
 
-            # ─── PLANTA ────────────────────────────────────────────────
+            # ─── PLANTA / STOCKPILE (balance de masa) ──────────────────
+            # alimentación = mineral directo desde mina + recuperado desde stockpile
+            # inventario final = inventario inicial + enviado a stock − recuperado
             metal_econ_t  = sum(d[2] for d in mined_details)
             metal_marg_t  = sum(d[4] for d in mined_details)
             ton_econ_t    = sum(d[1] for d in mined_details)
             ton_marg_t    = sum(d[3] for d in mined_details)
 
-            # Enviar mineral económico a planta, marginal a stockpile
-            sp_economic.ingresar(ton_econ_t, metal_econ_t)
-            sp_marginal.ingresar(ton_marg_t, metal_marg_t)
+            directo = min(ton_econ_t, cap_pl)                       # mineral económico directo a planta
+            metal_directo = metal_econ_t * (directo / ton_econ_t) if ton_econ_t > 1e-9 else 0.0
+            a_stock_e = ton_econ_t - directo
+            sp_economic.ingresar(a_stock_e, metal_econ_t - metal_directo)
+            sp_marginal.ingresar(ton_marg_t, metal_marg_t)          # marginal siempre a stock
+            a_stock = a_stock_e + ton_marg_t
 
-            # Pull desde stockpile para completar planta
-            feed_total = 0.0
-            metal_feed = 0.0
-            ton_fresh  = 0.0
-
-            cap_planta = cfg.cap_planta_t
-            # Primero feed fresco (económico ya en SP)
-            pull_econ, metal_pull_econ = sp_economic.retirar(min(cap_planta, sp_economic.get_inventory()[0]))
-            feed_total += pull_econ
-            metal_feed += metal_pull_econ
-            ton_fresh  += pull_econ
-
-            deficit = cap_planta - feed_total
-            pull_marg_econ, metal_marg_econ = sp_economic.retirar(min(deficit, 0.0))  # econ sp vacío
-            pull_sp_marg, metal_sp_marg = sp_marginal.retirar(min(deficit, sp_marginal._ton))
-            feed_total += pull_sp_marg
-            metal_feed += metal_sp_marg
+            feed_total = directo
+            metal_feed = metal_directo
+            deficit    = max(0.0, cap_pl - feed_total)
+            lim        = cap_recup
+            pull_e, m_pull_e = sp_economic.retirar(min(deficit, lim))
+            lim -= pull_e
+            pull_m, m_pull_m = sp_marginal.retirar(min(deficit - pull_e, lim))
+            feed_total += pull_e + pull_m
+            metal_feed += m_pull_e + m_pull_m
+            recuperado = pull_e + pull_m
 
             # Economía período
             ley_head_t = (metal_feed / feed_total * 100.0) if feed_total > 1e-9 else 0.0
             ingresos   = valor_por_ton_proc * metal_feed
             c_mina     = self.eco.costo_mina * (tons_ore_t + tons_waste_t)
             c_planta   = self.eco.costo_planta * feed_total
-            c_rehandle = self.sch.costo_remanejo * pull_sp_marg
+            c_rehandle = self.sch.costo_remanejo * recuperado
             inv_m, _   = sp_marginal.get_inventory()
             inv_e, _   = sp_economic.get_inventory()
             c_hold     = self.sch.costo_holding * (inv_m + inv_e)
@@ -344,15 +359,47 @@ class HeuristicaFaseBanco:
             van_t = (ingresos - c_mina - c_planta - c_rehandle - c_hold) * discount_t
             total_van += van_t
 
+            # Metal contenido / recuperable (t para leyes en %, oz para g/t)
+            rec = self.eco.recuperacion_dec
+            if self.eco.unidad_ley == "%":
+                m_cont = metal_feed                      # (ton × ley%/100) = toneladas de metal
+            else:
+                m_cont = metal_feed * 100.0 / 31.1035    # g/t → gramos → onzas troy
+            ley_mina_t = (sum(d[2] + d[4] for d in mined_details) / tons_ore_t * 100.0) if tons_ore_t > 1e-9 else 0.0
+
+            # Extracción por fase y período + causa de cada detención de fase abierta
+            por_fase = defaultdict(lambda: [0.0, 0.0, 0.0])
+            for d in mined_details:
+                f_ = int(fase_arr[d[0]]); tt_ = float(ton_arr[d[0]])
+                por_fase[f_][0] += d[1] + d[3]; por_fase[f_][1] += tt_ - d[1] - d[3]; por_fase[f_][2] += d[2] + d[4]
+            for f_, (o_, w_, m_) in por_fase.items():
+                fase_per_rows.append({"fase": f_, "periodo": t, "mineral_Mt": o_ / 1e6, "esteril_Mt": w_ / 1e6,
+                                      "ley": (m_ / o_ * 100.0) if o_ > 1e-9 else 0.0})
+            for f in phases:
+                if f in fases_abiertas and not fase_agotada(f) and f not in por_fase:
+                    acces = False
+                    for pz in fase_bancos[f]:
+                        for u in pendientes.get((f, pz), []):
+                            if not any(not mined_mask[p] for p in precedencias[u]):
+                                acces = True; break
+                        if acces: break
+                    motivo = ("capacidad de mina/planta/stock agotada en el período" if acces
+                              else "sin acceso: espera extracción del banco superior")
+                    interrupciones.append({"fase": int(f), "periodo": t, "motivo": motivo})
+
             res_rows.append({
                 "periodo":              t,
                 "mineral_mined_Mt":     tons_ore_t / 1e6,
                 "esteril_Mt":           tons_waste_t / 1e6,
                 "mov_total_Mt":         (tons_ore_t + tons_waste_t) / 1e6,
-                "mina_ley_mined_pct":   (sum(d[2]+d[4] for d in mined_details) / tons_ore_t * 100.0)
-                                        if tons_ore_t > 1e-9 else 0.0,
+                "mina_ley_mined_pct":   ley_mina_t,
+                "planta_directo_Mt":    directo / 1e6,
+                "a_stock_Mt":           a_stock / 1e6,
+                "desde_stock_Mt":       recuperado / 1e6,
                 "planta_feed_Mt":       feed_total / 1e6,
                 "planta_ley_head_pct":  ley_head_t,
+                "metal_contenido":      m_cont,
+                "metal_recuperable":    m_cont * rec,
                 "sp_inventario_Mt":     (inv_m + inv_e) / 1e6,
                 "VAN_net_MUSD":         van_t / 1e6,
                 "cutoff_econ_pct":      lc_econ_t,
@@ -388,7 +435,8 @@ class HeuristicaFaseBanco:
         bloques_out = df[cols_out].copy()
 
         logger.info(f"✅ Scheduler completado en {time.time()-t0:.1f}s | VAN={total_van/1e6:,.2f} MUSD")
-        return ResultadoScheduler(plan_df, bloques_out, total_van, self.config)
+        return ResultadoScheduler(plan_df, bloques_out, total_van, self.config,
+                                  pd.DataFrame(fase_per_rows), interrupciones)
 
     # ------------------------------------------------------------------
     # Helpers internos
@@ -421,15 +469,34 @@ class HeuristicaFaseBanco:
         return paneles[paneles["ton_total"] > 0.1].reset_index(drop=True)
 
     def _construir_precedencias(self, paneles_df, panel_key_to_u, bench_idx_map, unique_benches) -> dict:
+        """
+        Precedencia de cada panel (dentro de su fase):
+          1. vertical: el panel existente más cercano por encima en la misma columna (aunque falten bancos
+             intermedios, p. ej. modelos decimados), lo que encadena toda la columna;
+          2. espacial: los paneles vecinos (3×3) del banco inmediato superior, para respetar el talud.
+        """
         prec = defaultdict(list)
-        for u, row in paneles_df.iterrows():
-            fase, px, py, pz = row["fase"], row["panel_X"], row["panel_Y"], row["panel_Z"]
-            b_idx = bench_idx_map.get(pz)
-            if b_idx is not None and b_idx > 0:
+        px_s, py_s = float(self.sch.panel_size_x), float(self.sch.panel_size_y)
+        # banco inmediato superior existente en la fase, por columna
+        for (fase, px, py), g in paneles_df.groupby(["fase", "panel_X", "panel_Y"]):
+            g = g.sort_values("panel_Z", ascending=False)
+            idx = list(g.index)
+            for k in range(1, len(idx)):
+                prec[idx[k]].append(idx[k - 1])
+        if getattr(self.sch, "precedencia_espacial", True):
+            for u, row in paneles_df.iterrows():
+                fase, px, py, pz = row["fase"], row["panel_X"], row["panel_Y"], row["panel_Z"]
+                b_idx = bench_idx_map.get(pz)
+                if b_idx is None or b_idx == 0:
+                    continue
                 pz_arriba = unique_benches[b_idx - 1]
-                u_arriba  = panel_key_to_u.get((fase, px, py, pz_arriba))
-                if u_arriba is not None:
-                    prec[u].append(u_arriba)
+                for dx in (-px_s, 0.0, px_s):
+                    for dy in (-py_s, 0.0, py_s):
+                        if dx == 0.0 and dy == 0.0:
+                            continue
+                        v = panel_key_to_u.get((fase, px + dx, py + dy, pz_arriba))
+                        if v is not None and v not in prec[u]:
+                            prec[u].append(v)
         return prec
 
     def _construir_secuencias(self, paneles_df, phases) -> tuple:
